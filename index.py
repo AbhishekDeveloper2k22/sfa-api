@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
+from sfa.api.routes import router as sfa_router
 import logging
 import os
 from app.middlewares.logging_middleware import log_requests  # We'll move the middleware
@@ -43,6 +44,10 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 #  Include all API routes
 app.include_router(
-    api_router
-    # prefix="/api"  # This will prefix all routes with /api
+    api_router,
+    prefix="/hrms"  # This will prefix all routes with /api
+)
+app.include_router(
+    sfa_router,
+    prefix="/sfa"  # This will prefix all routes with /api
 )

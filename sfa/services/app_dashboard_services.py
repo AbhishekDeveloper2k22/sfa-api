@@ -1,0 +1,729 @@
+import os
+import requests
+from datetime import datetime, timedelta, date
+from sfa.database import client1
+from dotenv import load_dotenv
+from bson import ObjectId
+import pytz
+import math
+
+load_dotenv()
+
+class AppDashboardService:
+    def __init__(self):
+        self.client_database = client1['hrms_master']
+        self.attendance_collection = self.client_database['attendance']
+        self.employee_collection = self.client_database['employee_master']
+        self.address_cache_collection = self.client_database['address_cache']  # New collection for caching
+        self.timezone = pytz.timezone('Asia/Kolkata')  # Default to IST
+        
+        # Office location (configurable)
+        self.office_location = {
+            # "latitude": 28.348456,  # Default to Ballabgarh coordinates
+            # "longitude": 77.3304092,
+            "latitude": 37.421998333333335,
+            "longitude": -122.084,   
+            "radius": 500  # meters
+        }
+
+    def _calculate_distance(self, lat1, lng1, lat2, lng2):
+        """Calculate distance between two points using Haversine formula"""
+        R = 6371e3  # Earth's radius in meters
+        φ1 = math.radians(lat1)
+        φ2 = math.radians(lat2)
+        Δφ = math.radians(lat2 - lat1)
+        Δλ = math.radians(lng2 - lng1)
+
+        a = math.sin(Δφ/2) * math.sin(Δφ/2) + \
+            math.cos(φ1) * math.cos(φ2) * \
+            math.sin(Δλ/2) * math.sin(Δλ/2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+        return R * c
+
+    def _validate_location(self, latitude, longitude):
+        """Validate if location is within office radius"""
+        distance = self._calculate_distance(
+            latitude, longitude,
+            self.office_location["latitude"],
+            self.office_location["longitude"]
+        )
+        return distance <= self.office_location["radius"], distance
+
+    def _validate_working_hours(self, punch_time):
+        """Validate if punch time is within working hours"""
+        # Working hours: 6 AM to 10 PM (flexible)
+        hour = punch_time.hour
+        return 6 <= hour <= 22
+
+    def _format_time(self, time_str):
+        """Format time string to 12-hour format safely for any format"""
+        try:
+            # Step 1: Remove timezone if present (+05:30 or -05:30)
+            if "+" in time_str:
+                time_str = time_str.split("+")[0]
+            elif "-" in time_str[1:]:  # Ignore first '-' for times like 01:23:45
+                time_str = time_str.split("-", 1)[0]
+
+            # Step 2: Remove microseconds if present
+            if "." in time_str:
+                time_str = time_str.split(".")[0]
+
+            # Step 3: Parse time
+            time_obj = datetime.strptime(time_str, "%H:%M:%S")
+
+            # Step 4: Convert to 12-hour format
+            return time_obj.strftime("%I:%M %p")  # e.g., 01:17 AM
+
+        except Exception as e:
+            return time_str
+
+    def _format_duration(self, hours):
+        """Format duration in hours to readable format"""
+        if hours < 1:
+            minutes = int(hours * 60)
+            return f"{minutes}m"
+        else:
+            whole_hours = int(hours)
+            minutes = int((hours - whole_hours) * 60)
+            if minutes == 0:
+                return f"{whole_hours}h"
+            else:
+                return f"{whole_hours}h {minutes}m"
+
+    def _get_address_from_coordinates(self, latitude, longitude):
+        """Get address from coordinates using OpenStreetMap (Nominatim) with caching"""
+        try:
+            # First, check if address is already cached
+            cached_address = self._get_cached_address(latitude, longitude)
+            if cached_address:
+                return cached_address
+            
+            # If not cached, resolve address from OpenStreetMap API
+            resolved_address = self._resolve_address_from_nominatim(latitude, longitude)
+
+
+            
+            # Cache the resolved address for future use
+            if resolved_address:
+                self._cache_address(latitude, longitude, resolved_address)
+            
+            return resolved_address
+            
+        except Exception as e:
+            # If all geocoding fails, return a more descriptive coordinate format
+            return self._format_coordinates_as_address(latitude, longitude)
+    
+    def _resolve_address_from_nominatim(self, latitude, longitude):
+        """Resolve address from OpenStreetMap (Nominatim) API"""
+        
+        try:
+            url = "https://nominatim.openstreetmap.org/reverse"
+            params = {
+                "lat": latitude,
+                "lon": longitude,
+                "format": "json",
+                "addressdetails": 1,
+                "zoom": 18,
+                "accept-language": "en"
+            }
+
+            # ✅ Required User-Agent to avoid 403
+            headers = {
+                "User-Agent": "HRMS-App/1.0 (contact@example.com)"
+            }
+
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                if data.get("display_name"):
+                    return data["display_name"]
+
+                # ✅ Build structured address
+                if data.get("address"):
+                    address_parts = []
+                    address_data = data["address"]
+
+                    # Building address in order of specificity
+                    if address_data.get("house_number"):
+                        address_parts.append(address_data["house_number"])
+
+                    if address_data.get("road"):
+                        address_parts.append(address_data["road"])
+
+                    if address_data.get("suburb"):
+                        address_parts.append(address_data["suburb"])
+
+                    if address_data.get("city") or address_data.get("town"):
+                        city = address_data.get("city") or address_data.get("town")
+                        address_parts.append(city)
+
+                    if address_data.get("state"):
+                        address_parts.append(address_data["state"])
+
+                    if address_data.get("postcode"):
+                        address_parts.append(address_data["postcode"])
+
+                    if address_data.get("country"):
+                        address_parts.append(address_data["country"])
+
+                    if address_parts:
+                        return ", ".join(address_parts)
+
+            # ✅ If Nominatim fails, fallback to coordinates
+            return self._format_coordinates_as_address(latitude, longitude)
+
+        except Exception as e:
+
+            return self._format_coordinates_as_address(latitude, longitude)
+
+    
+    def _format_coordinates_as_address(self, latitude, longitude):
+        """Format coordinates as a readable address-like string"""
+        try:
+            # Convert decimal coordinates to degrees, minutes, seconds for better readability
+            lat_deg = int(abs(latitude))
+            lat_min = int((abs(latitude) - lat_deg) * 60)
+            lat_sec = ((abs(latitude) - lat_deg - lat_min/60) * 3600)
+            lat_dir = "N" if latitude >= 0 else "S"
+            
+            lng_deg = int(abs(longitude))
+            lng_min = int((abs(longitude) - lng_deg) * 60)
+            lng_sec = ((abs(longitude) - lng_deg - lng_min/60) * 3600)
+            lng_dir = "E" if longitude >= 0 else "W"
+            
+            # Format as readable coordinates
+            lat_str = f"{lat_deg}°{lat_min}'{lat_sec:.1f}\"{lat_dir}"
+            lng_str = f"{lng_deg}°{lng_min}'{lng_sec:.1f}\"{lng_dir}"
+            
+            return f"Location: {lat_str}, {lng_str}"
+            
+        except Exception:
+            # Final fallback to simple decimal format
+            return f"Location: {latitude:.6f}, {longitude:.6f}"
+    
+    def _get_cached_address(self, latitude, longitude):
+        """Get cached address for coordinates if available"""
+        try:
+            # Round coordinates to 4 decimal places for caching (approximately 11 meters precision)
+            lat_rounded = round(latitude, 4)
+            lng_rounded = round(longitude, 4)
+            
+            # Check if address is cached
+            cached_address = self.address_cache_collection.find_one({
+                "latitude": lat_rounded,
+                "longitude": lng_rounded
+            })
+            
+            if cached_address and cached_address.get("address"):
+                return cached_address["address"]
+            
+            return None
+        except Exception:
+            return None
+    
+    def _cache_address(self, latitude, longitude, address):
+        """Cache address for coordinates"""
+        try:
+            # Round coordinates to 4 decimal places for caching
+            lat_rounded = round(latitude, 4)
+            lng_rounded = round(longitude, 4)
+            
+            # Store in cache with timestamp
+            cache_data = {
+                "latitude": lat_rounded,
+                "longitude": lng_rounded,
+                "address": address,
+                "cached_at": datetime.now(self.timezone).isoformat(),
+                "original_lat": latitude,
+                "original_lng": longitude
+            }
+            
+            # Use upsert to avoid duplicates
+            self.address_cache_collection.update_one(
+                {"latitude": lat_rounded, "longitude": lng_rounded},
+                {"$set": cache_data},
+                upsert=True
+            )
+            
+            return True
+        except Exception:
+            return False
+
+    def punch_in(self, user_id, location=None, notes=""):
+        """Punch in for attendance"""
+        try:
+            # Check if user exists
+            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return {
+                    "success": False,
+                    "message": "User not found",
+                    "error": {"code": "USER_NOT_FOUND", "details": "User does not exist"}
+                }
+
+            # Check if user is active
+            if user.get('employment_status') != 'Active':
+                return {
+                    "success": False,
+                    "message": "Account is inactive",
+                    "error": {"code": "ACCOUNT_INACTIVE", "details": "User account is not active"}
+                }
+
+            # Generate current date and time in Asia/Kolkata timezone
+            current_datetime = datetime.now(self.timezone)
+            punch_date = current_datetime.strftime("%Y-%m-%d")
+            punch_time = current_datetime.strftime("%H:%M:%S")
+            punch_datetime = current_datetime
+
+            # # Validate working hours
+            # if not self._validate_working_hours(punch_datetime):
+            #     return {
+            #         "success": False,
+            #         "message": "Outside working hours",
+            #         "error": {"code": "OUTSIDE_WORKING_HOURS", "details": "Punch in is only allowed between 6 AM and 10 PM"}
+            #     }
+
+            # Validate location if provided and generate address
+            if location and location.get("latitude") and location.get("longitude"):
+                lat = float(location["latitude"])
+                lng = float(location["longitude"])
+                is_within_range, distance = self._validate_location(lat, lng)
+                
+                if not is_within_range:
+                    return {
+                        "success": False,
+                        "message": "Location out of range",
+                        "error": {"code": "LOCATION_OUT_OF_RANGE", "details": f"You are {distance:.1f} meters away from the office. Please be within {self.office_location['radius']} meters to punch in."}
+                    }
+                
+                # Generate address from coordinates
+                address = self._get_address_from_coordinates(lat, lng)
+                location["address"] = address
+
+            # Check if already punched in for the given date
+            existing_attendance = self.attendance_collection.find_one({
+                "user_id": user_id,
+                "date": punch_date,
+                "punch_in_time": {"$exists": True},
+                "punch_out_time": {"$exists": False}
+            })
+
+            if existing_attendance:
+                return {
+                    "success": False,
+                    "message": "Already punched in today",
+                    "error": {"code": "ALREADY_PUNCHED_IN", "details": "You have already punched in for this date"}
+                }
+
+            # Create attendance record
+            attendance_data = {
+                "user_id": user_id,
+                "employee_id": user_id,
+                "date": punch_date,
+                "punch_in_time": punch_datetime.isoformat(),
+                "punch_in_latitude": location.get("latitude") if location else None,
+                "punch_in_longitude": location.get("longitude") if location else None,
+                "punch_in_accuracy": location.get("accuracy") if location else None,
+                "punch_in_address": location.get("address") if location else None,
+                "punch_in_notes": notes,
+                "punch_in_timestamp": punch_datetime.timestamp(),
+                "status": "in",
+                "created_at": datetime.now(self.timezone).isoformat(),
+                "updated_at": datetime.now(self.timezone).isoformat()
+            }
+
+            result = self.attendance_collection.insert_one(attendance_data)
+
+            if result.inserted_id:
+                return {
+                    "success": True,
+                    "message": "Punch in successful",
+                    "data": {
+                        "attendanceId": str(result.inserted_id),
+                        "status": "in",
+                        "punchTime": self._format_time(punch_time),
+                        "punchDateTime": punch_datetime.isoformat(),
+                        "location": location or {},
+                        "nextAction": "punch_out"
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "Failed to record punch in",
+                    "error": {"code": "DATABASE_ERROR", "details": "Could not save attendance record"}
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Punch in failed: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def punch_out(self, user_id, location=None, notes=""):
+        """Punch out for attendance"""
+        try:
+            # Check if user exists
+            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return {
+                    "success": False,
+                    "message": "User not found",
+                    "error": {"code": "USER_NOT_FOUND", "details": "User does not exist"}
+                }
+
+            # Generate current date and time in Asia/Kolkata timezone
+            current_datetime = datetime.now(self.timezone)
+            punch_date = current_datetime.strftime("%Y-%m-%d")
+            punch_time = current_datetime.strftime("%H:%M:%S")
+            punch_datetime = current_datetime
+
+            # Validate location if provided and generate address
+            if location and location.get("latitude") and location.get("longitude"):
+                lat = float(location["latitude"])
+                lng = float(location["longitude"])
+                is_within_range, distance = self._validate_location(lat, lng)
+                
+                if not is_within_range:
+                    return {
+                        "success": False,
+                        "message": "Location out of range",
+                        "error": {"code": "LOCATION_OUT_OF_RANGE", "details": f"You are {distance:.1f} meters away from the office. Please be within {self.office_location['radius']} meters to punch out."}
+                    }
+                
+                # Generate address from coordinates
+                address = self._get_address_from_coordinates(lat, lng)
+                location["address"] = address
+
+            # Find existing attendance record for the given date
+            existing_attendance = self.attendance_collection.find_one({
+                "user_id": user_id,
+                "date": punch_date,
+                "punch_in_time": {"$exists": True},
+                "punch_out_time": {"$exists": False}
+            })
+
+            if not existing_attendance:
+                # Check if user has already punched out today
+                completed_attendance = self.attendance_collection.find_one({
+                    "user_id": user_id,
+                    "date": punch_date,
+                    "punch_in_time": {"$exists": True},
+                    "punch_out_time": {"$exists": True}
+                })
+                
+                if completed_attendance:
+                    return {
+                        "success": False,
+                        "message": "Already punched out today",
+                        "error": {"code": "ALREADY_PUNCHED_OUT", "details": "You have already punched out for today"}
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": "No punch in found",
+                        "error": {"code": "NO_PUNCH_IN", "details": "Please punch in before punching out"}
+                    }
+
+            # Calculate working hours
+            punch_in_time = datetime.fromisoformat(existing_attendance['punch_in_time'])
+            working_hours = (punch_datetime - punch_in_time).total_seconds() / 3600
+
+            # Update attendance record with punch out
+            update_data = {
+                "punch_out_time": punch_datetime.isoformat(),
+                "punch_out_latitude": location.get("latitude") if location else None,
+                "punch_out_longitude": location.get("longitude") if location else None,
+                "punch_out_accuracy": location.get("accuracy") if location else None,
+                "punch_out_address": location.get("address") if location else None,
+                "punch_out_notes": notes,
+                "punch_out_timestamp": punch_datetime.timestamp(),
+                "working_hours": round(working_hours, 2),
+                "status": "completed",
+                "updated_at": datetime.now(self.timezone).isoformat()
+            }
+
+            result = self.attendance_collection.update_one(
+                {"_id": existing_attendance["_id"]},
+                {"$set": update_data}
+            )
+
+            if result.modified_count > 0:
+                return {
+                    "success": True,
+                    "message": "Punch out successful",
+                    "data": {
+                        "attendanceId": str(existing_attendance["_id"]),
+                        "status": "completed",
+                        "punchTime": self._format_time(punch_time),
+                        "punchDateTime": punch_datetime.isoformat(),
+                        "location": location or {},
+                        "duration": self._format_duration(working_hours),
+                        "nextAction": "completed"
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "Failed to record punch out",
+                    "error": {"code": "DATABASE_ERROR", "details": "Could not update attendance record"}
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Punch out failed: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_dashboard_overview(self, user_id, date=None):
+        """Get dashboard overview data for the user"""
+        try:
+            # Use provided date or current date
+            if date:
+                try:
+                    target_date = datetime.strptime(date, "%Y-%m-%d").date()
+                except ValueError:
+                    return {
+                        "success": False,
+                        "message": "Invalid date format",
+                        "error": {"code": "VALIDATION_ERROR", "details": "Date must be in YYYY-MM-DD format"}
+                    }
+            else:
+                target_date = datetime.now(self.timezone).date()
+            
+            # Get user info
+            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return {
+                    "success": False,
+                    "message": "User not found",
+                    "error": {"code": "USER_NOT_FOUND", "details": "User does not exist"}
+                }
+
+            # Get attendance for the target date
+            attendance = self.attendance_collection.find_one({
+                "user_id": user_id,
+                "date": target_date.isoformat()
+            })
+
+            # Build attendance data
+            attendance_data = {
+                "status": "out"
+            }
+
+            if attendance:
+                punch_in_time = attendance.get('punch_in_time')
+                punch_out_time = attendance.get('punch_out_time')
+                
+                if punch_in_time and not punch_out_time:
+                    attendance_data = {
+                        "status": "in",
+                        "punchInTime": self._format_time(punch_in_time.split('T')[1]),
+                        "punchInDateTime": punch_in_time,
+                        "duration": self._format_duration(self._calculate_working_hours(punch_in_time)),
+                        "location": {
+                            "punchIn": {
+                                "latitude": attendance.get('punch_in_latitude'),
+                                "longitude": attendance.get('punch_in_longitude'),
+                                "address": attendance.get('punch_in_address', '')
+                            }
+                        }
+                    }
+                elif punch_in_time and punch_out_time:
+                    duration = self._format_duration(attendance.get('working_hours', 0))
+                    attendance_data = {
+                        "status": "completed",
+                        "punchInTime": self._format_time(punch_in_time.split('T')[1]),
+                        "punchOutTime": self._format_time(punch_out_time.split('T')[1]),
+                        "punchInDateTime": punch_in_time,
+                        "punchOutDateTime": punch_out_time,
+                        "duration": duration,
+                        "location": {
+                            "punchIn": {
+                                "latitude": attendance.get('punch_in_latitude'),
+                                "longitude": attendance.get('punch_in_longitude'),
+                                "address": attendance.get('punch_in_address', '')
+                            },
+                            "punchOut": {
+                                "latitude": attendance.get('punch_out_latitude'),
+                                "longitude": attendance.get('punch_out_longitude'),
+                                "address": attendance.get('punch_out_address', '')
+                            }
+                        }
+                    }
+
+            # Attendance progress (dynamic calculation)
+            target_hours = 9  # Can be made configurable
+            tz = pytz.timezone("Asia/Kolkata")
+            today = datetime.now(tz).date()
+
+            attendance_record = self.attendance_collection.find_one({
+                "user_id": user_id,
+                "date": today.isoformat()
+            })
+
+            worked_hours = 0
+            if attendance_record and "punch_in_time" in attendance_record:
+                punch_in_time = datetime.fromisoformat(attendance_record["punch_in_time"]).astimezone(tz)
+                if "punch_out_time" in attendance_record:
+                    punch_out_time = datetime.fromisoformat(attendance_record["punch_out_time"]).astimezone(tz)
+                else:
+                    punch_out_time = datetime.now(tz)
+                worked_hours = (punch_out_time - punch_in_time).total_seconds() / 3600
+
+            attendance_progress = {
+                "percentage": round((worked_hours / target_hours) * 100) if target_hours else 0,
+                "workedHours": round(worked_hours, 2),
+                "targetHours": target_hours,
+                "status": "on track" if worked_hours >= target_hours else "behind"
+            }
+
+            return {
+                "success": True,
+                "data": {
+                    "attendance": attendance_data,
+                    "attendanceProgress": attendance_progress
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get dashboard overview: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_todays_celebrations(self, user_id, date=None, limit=10):
+        """Get today's birthdays and work anniversaries"""
+        try:
+            # Use provided date or current date
+            if date:
+                try:
+                    target_date = datetime.strptime(date, "%Y-%m-%d").date()
+                except ValueError:
+                    return {
+                        "success": False,
+                        "message": "Invalid date format",
+                        "error": {"code": "VALIDATION_ERROR", "details": "Date must be in YYYY-MM-DD format"}
+                    }
+            else:
+                target_date = datetime.now(self.timezone).date()
+
+            celebrations = []
+            total_birthdays = 0
+            total_anniversaries = 0
+
+            # Get all active employees
+            employees = list(self.employee_collection.find({
+                "employment_status": "Active"
+            }).limit(limit * 2))  # Get more to filter
+
+            for employee in employees:
+                # Check for birthdays
+                if employee.get('date_of_birth'):
+                    try:
+                        dob = datetime.strptime(employee['date_of_birth'], "%Y-%m-%d").date()
+                        if dob.month == target_date.month and dob.day == target_date.day:
+                            celebrations.append({
+                                "id": str(employee["_id"]),
+                                "employeeId": str(employee["_id"]),
+                                "name": employee.get("full_name", ""),
+                                "designation": employee.get("designation", ""),
+                                "department": employee.get("department", ""),
+                                "type": "birthday",
+                                "date": target_date.isoformat(),
+                                "years": None,
+                                "profileImage": employee.get("profile_image", "/images/profile_img.png"),
+                                "color": "#ec4899",
+                                "backgroundColor": "#fdf2f8"
+                            })
+                            total_birthdays += 1
+                    except:
+                        pass
+
+                # Check for work anniversaries
+                if employee.get('joining_date'):
+                    try:
+                        join_date = datetime.strptime(employee['joining_date'], "%Y-%m-%d").date()
+                        if join_date.month == target_date.month and join_date.day == target_date.day:
+                            years = target_date.year - join_date.year
+                            celebrations.append({
+                                "id": str(employee["_id"]),
+                                "employeeId": str(employee["_id"]),
+                                "name": employee.get("full_name", ""),
+                                "designation": employee.get("designation", ""),
+                                "department": employee.get("department", ""),
+                                "type": "anniversary",
+                                "date": target_date.isoformat(),
+                                "years": years,
+                                "profileImage": employee.get("profile_image", "/images/profile_img.png"),
+                                "color": "#3b82f6",
+                                "backgroundColor": "#eff6ff"
+                            })
+                            total_anniversaries += 1
+                    except:
+                        pass
+
+            # Limit results
+            celebrations = celebrations[:limit]
+
+            return {
+                "success": True,
+                "data": {
+                    "celebrations": celebrations,
+                    "summary": {
+                        "totalBirthdays": total_birthdays,
+                        "totalAnniversaries": total_anniversaries,
+                        "totalCelebrations": len(celebrations)
+                    }
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get celebrations data: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_notifications_count(self, user_id):
+        """Get unread notifications count for badge"""
+        try:
+            # For now, return mock data
+            # In a real implementation, this would query a notifications collection
+            mock_data = {
+                "unreadCount": 3,
+                "categories": {
+                    "announcements": 1,
+                    "attendance": 0,
+                    "leave": 2,
+                    "general": 0
+                }
+            }
+
+            return {
+                "success": True,
+                "data": mock_data
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get notifications count: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def _calculate_working_hours(self, punch_in_time_str):
+        """Calculate working hours from punch in time to now"""
+        try:
+            punch_in_time = datetime.fromisoformat(punch_in_time_str)
+            current_time = datetime.now(self.timezone)
+            working_hours = (current_time - punch_in_time).total_seconds() / 3600
+            return round(working_hours, 2)
+        except:
+            return 0 
