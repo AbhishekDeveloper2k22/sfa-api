@@ -1,0 +1,73 @@
+
+# Python
+__pycache__/
+# These are some examples of commonly ignored file patterns.
+# You should customize this list as applicable to your project.
+# Learn more about .gitignore:
+#     https://www.atlassian.com/git/tutorials/saving-changes/gitignore
+
+
+# folders
+
+/golbal_faiss/*
+/uploads/*
+/static/*
+/__pycache__/*
+/__MACOSX/*
+/C_/*
+/brand_faiss/*
+/fast_api/*
+/venv/*
+/funnel_excel/*
+/.env
+myvenv/
+
+
+# Node artifact files
+node_modules/
+dist/
+
+
+# Compiled Java class files
+*.class
+
+# Compiled Python bytecode
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+.env.test.local
+.env.test.production
+.env.test.development
+# Zip files
+.zip
+
+# Logs
+*.log
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.coverage
+.pytest_cache/"feel_prime.zip" 
+
+# Ignore all zip files
+*.zip
