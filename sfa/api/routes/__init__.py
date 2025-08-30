@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from .base import router as base_router
 from sfa.api.routes import employee_module
 from sfa.api.routes import user_auth_module
 from sfa.api.routes import app_user_auth_module
@@ -8,7 +9,9 @@ from sfa.api.routes import app_request_module
 from sfa.api.routes import app_sidebar_module
 from sfa.api.routes import attendance_module
 from sfa.api.routes import app_ai_agent_module
-from .base import router as base_router
+
+#web
+from sfa.api.routes import web_user_module
 
 router = APIRouter()
 
@@ -27,3 +30,6 @@ router.include_router(app_request_module.router, prefix="/api/app/request")
 router.include_router(app_sidebar_module.router, prefix="/api/app/sidebar")
 router.include_router(attendance_module.router, prefix="/api/attendance")
 router.include_router(app_ai_agent_module.router, prefix="/api/app/ai-agent")
+
+#web routes
+router.include_router(web_user_module.router, prefix="/api/web")
