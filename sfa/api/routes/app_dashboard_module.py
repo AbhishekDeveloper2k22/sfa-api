@@ -75,64 +75,311 @@ def validate_location(location: dict):
     except (ValueError, TypeError):
         return False, "latitude and longitude must be valid numbers"
 
-@router.post("/punch-in")
-async def punch_in(request: Request, current_user: dict = Depends(get_current_user)):
-    """Punch in for attendance"""
+
+
+@router.post("/startAttendance")
+async def start_attend(request: Request, current_user: dict = Depends(get_current_user)):
+    """Start workday attendance (Punch-in)"""
+    print("start_attend api called")
     try:
         body = await request.json()
         user_id = current_user.get("user_id")
         
-        # Validate required fields - only location is required from frontend
-        location = body.get("location", {})
-        notes = body.get("notes", "")
+        # Extract lat and lng from request
+        lat = body.get("lat")
+        lng = body.get("lng")
         
-        # Validate location with enhanced validation
-        location_valid, location_error = validate_location(location)
-        if not location_valid:
+        # Validate required fields
+        if not lat or not lng:
             return format_response(
                 success=False,
-                msg="Invalid location data",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "INVALID_LOCATION",
-                        "details": location_error
-                    }
-                }
-            )
-        
-        # Validate notes length
-        if notes and len(notes) > 1000:
-            return format_response(
-                success=False,
-                msg="Notes too long",
+                msg="Latitude and longitude are required",
                 statuscode=400,
                 data={
                     "error": {
                         "code": "VALIDATION_ERROR",
-                        "details": "notes must be less than 1000 characters"
+                        "details": "lat and lng are required"
                     }
                 }
             )
         
+        # Validate lat and lng are valid numbers
+        try:
+            lat = float(lat)
+            lng = float(lng)
+        except (ValueError, TypeError):
+            return format_response(
+                success=False,
+                msg="Invalid coordinates",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "lat and lng must be valid numbers"
+                    }
+                }
+            )
+        
+        # Create location object for the service
+        location = {
+            "latitude": lat,
+            "longitude": lng
+        }
+        
         service = AppDashboardService()
-        result = service.punch_in(
+        result = service.start_attend(
             user_id=user_id,
-            location=location,
-            notes=notes
+            location=location
         )
         
         if not result.get("success"):
             return format_response(
                 success=False,
-                msg=result.get("message", "Punch in failed"),
+                msg=result.get("message", "Attendance start failed"),
                 statuscode=400,
                 data={"error": result.get("error", {})}
             )
         
         return format_response(
             success=True,
-            msg="Punch in successful",
+            msg="Attendance started successfully",
+            statuscode=200,
+            data={
+                "attendance_id": result.get("data", {}).get("attendanceId"),
+            }
+        )
+        
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": "An unexpected error occurred"
+                }
+            }
+        )
+
+@router.post("/stopAttendance")
+async def stop_attend(request: Request, current_user: dict = Depends(get_current_user)):
+    """Stop workday attendance (Punch-out)"""
+    print("stop_attend api called")
+    try:
+        body = await request.json()
+        user_id = current_user.get("user_id")
+        
+        # Extract data from request
+        attendance_id = body.get("attendance_id")
+        lat = body.get("lat")
+        lng = body.get("lng")
+        
+        # Validate required fields
+        if not attendance_id:
+            return format_response(
+                success=False,
+                msg="Attendance ID is required",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "attendance_id is required"
+                    }
+                }
+            )
+        
+        if not lat or not lng:
+            return format_response(
+                success=False,
+                msg="Latitude and longitude are required",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "lat and lng are required"
+                    }
+                }
+            )
+        
+        # Validate lat and lng are valid numbers
+        try:
+            lat = float(lat)
+            lng = float(lng)
+        except (ValueError, TypeError):
+            return format_response(
+                success=False,
+                msg="Invalid coordinates",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "lat and lng must be valid numbers"
+                    }
+                }
+            )
+        # Create location object for the service
+        location = {
+            "latitude": lat,
+            "longitude": lng
+        }
+        
+        service = AppDashboardService()
+        result = service.stop_attend(
+            user_id=user_id,
+            attendance_id=attendance_id,
+            location=location
+        )
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Attendance stop failed"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg="Attendance stopped successfully",
+            statuscode=200,
+            data={
+                "attendance_id": attendance_id,
+                "working_hours": result.get("data", {}).get("working_hours", "00:00")
+            }
+        )
+        
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": "An unexpected error occurred"
+                }
+            }
+                 )
+
+@router.post("/upload-attendance-image")
+async def upload_attendance_image(request: Request, current_user: dict = Depends(get_current_user)):
+    """Upload attendance image for a specific attendance record"""
+    print("upload_attendance_image api called")
+    try:
+        # Get form data
+        form = await request.form()
+        attendance_id = form.get("attendance_id")
+        image_file = form.get("image")
+        
+        # Validate required fields
+        if not attendance_id:
+            return format_response(
+                success=False,
+                msg="Attendance ID is required",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "attendance_id is required"
+                    }
+                }
+            )
+        
+        if not image_file:
+            return format_response(
+                success=False,
+                msg="Image file is required",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "image file is required"
+                    }
+                }
+            )
+        
+        # Validate attendance_id format
+        try:
+            from bson import ObjectId
+            ObjectId(attendance_id)
+        except Exception:
+            return format_response(
+                success=False,
+                msg="Invalid attendance ID format",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "attendance_id must be a valid ObjectId"
+                    }
+                }
+            )
+        
+        # Validate image file
+        if not hasattr(image_file, 'filename') or not image_file.filename:
+            return format_response(
+                success=False,
+                msg="Invalid image file",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "Please provide a valid image file"
+                    }
+                }
+            )
+        
+        # Check file type
+        allowed_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+        file_extension = os.path.splitext(image_file.filename.lower())[1]
+        if file_extension not in allowed_extensions:
+            return format_response(
+                success=False,
+                msg="Invalid file type",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": f"Only {', '.join(allowed_extensions)} files are allowed"
+                    }
+                }
+            )
+        
+        # Check file size (max 5MB)
+        max_size = 5 * 1024 * 1024  # 5MB
+        if hasattr(image_file, 'size') and image_file.size > max_size:
+            return format_response(
+                success=False,
+                msg="File too large",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "File size must be less than 5MB"
+                    }
+                }
+            )
+        
+        user_id = current_user.get("user_id")
+        service = AppDashboardService()
+        result = service.upload_attendance_image(
+            user_id=user_id,
+            attendance_id=attendance_id,
+            image_file=image_file
+        )
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Image upload failed"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg="Attendance image uploaded successfully",
             statuscode=200,
             data=result.get("data", {})
         )
@@ -150,80 +397,7 @@ async def punch_in(request: Request, current_user: dict = Depends(get_current_us
             }
         )
 
-@router.post("/punch-out")
-async def punch_out(request: Request, current_user: dict = Depends(get_current_user)):
-    """Punch out for attendance - date and time generated on backend, address from coordinates"""
-    try:
-        body = await request.json()
-        user_id = current_user.get("user_id")
-        
-        # Validate required fields - only location is required from frontend
-        location = body.get("location", {})
-        notes = body.get("notes", "")
-        
-        # Validate location with enhanced validation
-        location_valid, location_error = validate_location(location)
-        if not location_valid:
-            return format_response(
-                success=False,
-                msg="Invalid location data",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "INVALID_LOCATION",
-                        "details": location_error
-                    }
-                }
-            )
-        
-        # Validate notes length
-        if notes and len(notes) > 1000:
-            return format_response(
-                success=False,
-                msg="Notes too long",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "notes must be less than 1000 characters"
-                    }
-                }
-            )
-        
-        service = AppDashboardService()
-        result = service.punch_out(
-            user_id=user_id,
-            location=location,
-            notes=notes
-        )
-        
-        if not result.get("success"):
-            return format_response(
-                success=False,
-                msg=result.get("message", "Punch out failed"),
-                statuscode=400,
-                data={"error": result.get("error", {})}
-            )
-        
-        return format_response(
-            success=True,
-            msg="Punch out successful",
-            statuscode=200,
-            data=result.get("data", {})
-        )
-        
-    except Exception as e:
-        return format_response(
-            success=False,
-            msg="Internal server error",
-            statuscode=500,
-            data={
-                "error": {
-                    "code": "SERVER_ERROR",
-                    "details": "An unexpected error occurred"
-                }
-            }
-        )
+
 
 @router.get("/overview")
 async def get_dashboard_overview(
@@ -281,6 +455,44 @@ async def get_dashboard_overview(
             msg="Dashboard overview data retrieved successfully",
             statuscode=200,
             data=combined_data
+        )
+        
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": "An unexpected error occurred"
+                }
+            }
+        )
+
+@router.get("/today-attendance")
+async def get_today_attendance(current_user: dict = Depends(get_current_user)):
+    """Get today's attendance status for the current user"""
+    print("get_today_attendance api called")
+    try:
+        user_id = current_user.get("user_id")
+        
+        service = AppDashboardService()
+        result = service.get_today_attendance(user_id)
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get today's attendance"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg="Today's attendance retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
         )
         
     except Exception as e:

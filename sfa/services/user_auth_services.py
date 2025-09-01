@@ -14,7 +14,7 @@ JWT_EXP_DELTA_MINUTES = 10080  # 7 days
 
 class BaseAuthService:
     def __init__(self):
-        self.client_database = client1['hrms_master']
+        self.client_database = client1['talbros']
         self.user_collection = self.client_database['users']  # Changed to 'users' collection
 
 class UserAuthService(BaseAuthService):

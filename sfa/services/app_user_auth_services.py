@@ -36,8 +36,9 @@ REFRESH_TOKEN_EXP_DELTA_DAYS = 7
 
 class BaseAuthService:
     def __init__(self):
-        self.client_database = client1['hrms_master']
-        self.user_collection = self.client_database['employee_master']
+        self.client_database = client1['talbros']  # SFA database
+        self.user_collection = self.client_database['employee_master']  # Internal employees
+        self.users_collection = self.client_database['users']  # Sales users (user_type == 5)
         self.password_reset_collection = self.client_database['password_reset_tokens']
 
 class AppUserAuthService(BaseAuthService):
@@ -46,7 +47,38 @@ class AppUserAuthService(BaseAuthService):
 
     def authenticate_user(self, employee_id, password):
         """Authenticate user with employee ID/email and password"""
-        # Try to find user by email or employee ID
+        # First try to find user in users collection (sales users)
+        user = self.users_collection.find_one({
+            "$or": [
+                {"email": employee_id},
+                {"employee_code": employee_id},
+                {"mobile": employee_id}
+            ]
+        })
+        
+        if user and user.get('user_type') == 5:  # Sales user
+            print(f"Found sales user: {user.get('name')} with user_type: {user.get('user_type')}")
+            # For sales users, check if they have password field
+            if user.get('password'):
+                # Check if password is hashed with bcrypt
+                if user['password'].startswith('$2b$'):
+                    if not bcrypt.verify(password, user['password']):
+                        print("Sales user password verification failed (bcrypt)")
+                        return None
+                else:
+                    # Handle plain text passwords (for backward compatibility)
+                    if user['password'] != password:
+                        print("Sales user password verification failed (plain text)")
+                        return None
+                print("Sales user authentication successful")
+                return user
+            else:
+                # If no password field, return None (sales users need password)
+                print("Sales user has no password field")
+                return None
+        
+        # If not found in users collection or not sales user, try employee_master
+        print(f"Checking employee_master collection for: {employee_id}")
         user = self.user_collection.find_one({
             "$or": [
                 {"email": employee_id},
@@ -55,17 +87,21 @@ class AppUserAuthService(BaseAuthService):
         })
         
         if not user or not user.get('password'):
+            print("No user found in employee_master or no password")
             return None
         
         # Check if password is hashed with bcrypt
         if user['password'].startswith('$2b$'):
             if not bcrypt.verify(password, user['password']):
+                print("Employee password verification failed (bcrypt)")
                 return None
         else:
             # Handle plain text passwords (for backward compatibility)
             if user['password'] != password:
+                print("Employee password verification failed (plain text)")
                 return None
         
+        print("Employee authentication successful")
         return user
 
     def create_access_token(self, user_data, expires_delta=None):
@@ -103,29 +139,52 @@ class AppUserAuthService(BaseAuthService):
             return None
 
     def login(self, employee_id, password, device_info=None, remember_me=False):
-        """HRMS Pro login with enhanced response"""
+        """SFA login with enhanced response for sales force automation"""
         user = self.authenticate_user(employee_id, password)
         if not user:
             return None
         
-        # Check if account is active
-        if user.get('employment_status') != 'Active':
-            return {
-                "success": False,
-                "error": {
-                    "code": "ACCOUNT_INACTIVE",
-                    "details": "Account has been deactivated by administrator"
+        # Check if user is from users collection (sales user)
+        is_sales_user = user.get('user_type') == 5
+        
+        # Check if account is active (different logic for sales users)
+        if is_sales_user:
+            # For sales users, check if they exist and have valid user_type
+            if user.get('user_type') != 5:
+                return {
+                    "error": {
+                        "code": "INVALID_USER_TYPE",
+                        "details": "User is not authorized as sales user"
+                    }
                 }
-            }
+        else:
+            # For regular employees, check employment status
+            if user.get('employment_status') != 'Active':
+                return {
+                    "error": {
+                        "code": "ACCOUNT_INACTIVE",
+                        "details": "Account has been deactivated by administrator"
+                    }
+                }
         
         # Create tokens with extended expiry for remember me
-        user_data = {
-            "sub": user.get('email') or user.get('official_email_username'),
-            "user_id": str(user['_id']),
-            "employee_id": str(user['_id']),  # Using _id as employee_id
-            "full_name": user.get('full_name', ''),
-            "role": user.get('role_access_level', 'Employee')
-        }
+        if is_sales_user:
+            user_data = {
+                "sub": user.get('email') or user.get('mobile'),
+                "user_id": str(user['_id']),
+                "employee_id": user.get('employee_code', str(user['_id'])),
+                "full_name": user.get('name', ''),
+                "role": "Sales User",
+                "user_type": user.get('user_type')
+            }
+        else:
+            user_data = {
+                "sub": user.get('email') or user.get('official_email_username'),
+                "user_id": str(user['_id']),
+                "employee_id": str(user['_id']),  # Using _id as employee_id
+                "full_name": user.get('full_name', ''),
+                "role": user.get('role_access_level', 'Employee')
+            }
         
         # Adjust token expiry based on remember me
         access_token_expires = timedelta(minutes=JWT_EXP_DELTA_MINUTES)
@@ -135,24 +194,46 @@ class AppUserAuthService(BaseAuthService):
         refresh_token = self.create_refresh_token(user_data, refresh_token_expires)
         
         # Update last login timestamp
-        self.update_last_login(user.get('email') or user.get('official_email_username'))
+        if is_sales_user:
+            self.update_last_login(user.get('email') or user.get('mobile'))
+        else:
+            self.update_last_login(user.get('email') or user.get('official_email_username'))
         
-        # Prepare user info according to HRMS Pro specification
-        user_info = {
-            "id": str(user['_id']),
-            "employeeId": str(user['_id']),  # Using _id as employeeId
-            "name": user.get('full_name', ''),
-            "email": user.get('email') or user.get('official_email_username', ''),
-            "role": user.get('role_access_level', 'Employee'),
-            "department": user.get('department', ''),
-            "designation": user.get('designation', ''),
-            "profileImage": user.get('profile_image', '/images/profile_img.png'),
-            "phoneNumber": user.get('mobile_no', ''),
-            "dateOfJoining": user.get('joining_date', ''),
-            "isActive": user.get('employment_status') == 'Active',
-            "permissions": self.get_user_permissions(user.get('role_access_level', 'Employee')),
-            "lastLoginAt": datetime.utcnow().isoformat()
-        }
+        # Prepare user info according to SFA specification
+        if is_sales_user:
+            user_info = {
+                "id": str(user['_id']),
+                "employeeId": user.get('employee_code', str(user['_id'])),
+                "name": user.get('name', ''),
+                "email": user.get('email', ''),
+                "role": "Sales User",
+                "department": "Sales",
+                "designation": user.get('designation', ''),
+                "profileImage": "/images/profile_img.png",
+                "phoneNumber": user.get('mobile', ''),
+                "dateOfJoining": user.get('date_of_joining', ''),
+                "isActive": True,
+                "lastLoginAt": datetime.utcnow().isoformat(),
+                "userType": user.get('user_type'),
+                "location": user.get('location', {}),
+                "weeklyOff": user.get('weekly_off', ''),
+                "reportingManagerId": user.get('reporting_manager_id')
+            }
+        else:
+            user_info = {
+                "id": str(user['_id']),
+                "employeeId": str(user['_id']),  # Using _id as employeeId
+                "name": user.get('full_name', ''),
+                "email": user.get('email') or user.get('official_email_username', ''),
+                "role": user.get('role_access_level', 'Employee'),
+                "department": user.get('department', ''),
+                "designation": user.get('designation', ''),
+                "profileImage": user.get('profile_image', '/images/profile_img.png'),
+                "phoneNumber": user.get('mobile_no', ''),
+                "dateOfJoining": user.get('joining_date', ''),
+                "isActive": user.get('employment_status') == 'Active',
+                "lastLoginAt": datetime.utcnow().isoformat()
+            }
         
         # Prepare tokens object
         tokens = {
@@ -162,85 +243,10 @@ class AppUserAuthService(BaseAuthService):
             "tokenType": "Bearer"
         }
         
-        # Prepare company info (default values)
-        company = {
-            "id": "comp_001",
-            "name": "HRMS Pro Company",
-            "logo": "/images/company_logo.png",
-            "timezone": "Asia/Kolkata",
-            "workingDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-            "workingHours": {
-                "start": "09:00",
-                "end": "18:00"
-            }
-        }
-        
         return {
-            "success": True,
             "user": user_info,
             "tokens": tokens,
-            "company": company
         }
-
-    def register(self, email, password, full_name):
-        """User registration"""
-        try:
-            # Check if user already exists
-            existing_user = self.user_collection.find_one({"email": email})
-            if existing_user:
-                return {
-                    "success": False,
-                    "message": "User with this email already exists"
-                }
-            
-            # Validate email format
-            if not self.is_valid_email(email):
-                return {
-                    "success": False,
-                    "message": "Invalid email format"
-                }
-            
-            # Validate password strength
-            if not self.is_valid_password(password):
-                return {
-                    "success": False,
-                    "message": "Password must be at least 8 characters long and contain letters and numbers"
-                }
-            
-            # Hash password
-            hashed_password = bcrypt.hash(password)
-            
-            # Create user document
-            user_data = {
-                "email": email,
-                "password": hashed_password,
-                "full_name": full_name,
-                "role_access_level": "Employee",
-                "employment_status": "Active",
-                "date_created": datetime.utcnow().isoformat(),
-                "created_by": "system"
-            }
-            
-            # Insert user
-            result = self.user_collection.insert_one(user_data)
-            
-            if result.inserted_id:
-                return {
-                    "success": True,
-                    "message": "User registered successfully",
-                    "user_id": str(result.inserted_id)
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": "Failed to create user"
-                }
-                
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"Registration failed: {str(e)}"
-            }
 
     def get_user_profile(self, email):
         """Get user profile by email organized in categories"""
@@ -602,12 +608,23 @@ class AppUserAuthService(BaseAuthService):
     def update_last_login(self, email):
         """Update user's last login timestamp"""
         try:
-            self.user_collection.update_one(
-                {"$or": [{"email": email}, {"official_email_username": email}]},
+            # First try to update in users collection (sales users)
+            result = self.users_collection.update_one(
+                {"$or": [{"email": email}, {"mobile": email}]},
                 {"$set": {
                     "last_login": datetime.utcnow().isoformat()
                 }}
             )
+            
+            # If not found in users collection, try employee_master
+            if result.matched_count == 0:
+                self.user_collection.update_one(
+                    {"$or": [{"email": email}, {"official_email_username": email}]},
+                    {"$set": {
+                        "last_login": datetime.utcnow().isoformat()
+                    }}
+                )
+            
             return True
         except Exception as e:
             return False
@@ -654,4 +671,67 @@ class AppUserAuthService(BaseAuthService):
                 "users.manage"
             ]
         }
-        return permissions_map.get(role, permissions_map["Employee"]) 
+        return permissions_map.get(role, permissions_map["Employee"])
+    
+    def get_sales_user_permissions(self, permissions_dict):
+        """Get sales user permissions based on permissions object"""
+        if not permissions_dict:
+            return []
+        
+        permissions = []
+        if permissions_dict.get('view'):
+            permissions.extend([
+                "sales.view",
+                "customers.view",
+                "leads.view",
+                "orders.view",
+                "reports.view"
+            ])
+        
+        if permissions_dict.get('edit'):
+            permissions.extend([
+                "sales.edit",
+                "customers.edit",
+                "leads.edit",
+                "orders.edit",
+                "profile.edit"
+            ])
+        
+        if permissions_dict.get('add'):
+            permissions.extend([
+                "sales.add",
+                "customers.add",
+                "leads.add",
+                "orders.add"
+            ])
+        
+        if permissions_dict.get('delete'):
+            permissions.extend([
+                "sales.delete",
+                "customers.delete",
+                "leads.delete",
+                "orders.delete"
+            ])
+        
+        if permissions_dict.get('export'):
+            permissions.extend([
+                "sales.export",
+                "customers.export",
+                "leads.export",
+                "orders.export",
+                "reports.export"
+            ])
+        
+        if permissions_dict.get('import'):
+            permissions.extend([
+                "customers.import",
+                "leads.import"
+            ])
+        
+        # Add default permissions for all sales users
+        permissions.extend([
+            "attendance.mark",
+            "profile.view"
+        ])
+        
+        return list(set(permissions))  # Remove duplicates 
