@@ -11,9 +11,10 @@ load_dotenv()
 
 class AppDashboardService:
     def __init__(self):
-        self.client_database = client1['hrms_master']
+        self.client_database = client1['talbros']
         self.attendance_collection = self.client_database['attendance']
         self.employee_collection = self.client_database['employee_master']
+        self.users_collection = self.client_database['users']
         self.address_cache_collection = self.client_database['address_cache']  # New collection for caching
         self.timezone = pytz.timezone('Asia/Kolkata')  # Default to IST
         
@@ -252,11 +253,11 @@ class AppDashboardService:
         except Exception:
             return False
 
-    def punch_in(self, user_id, location=None, notes=""):
-        """Punch in for attendance"""
+    def start_attend(self, user_id, location=None):
+        """Start workday attendance (Punch-in)"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id)})
             if not user:
                 return {
                     "success": False,
@@ -278,26 +279,10 @@ class AppDashboardService:
             punch_time = current_datetime.strftime("%H:%M:%S")
             punch_datetime = current_datetime
 
-            # # Validate working hours
-            # if not self._validate_working_hours(punch_datetime):
-            #     return {
-            #         "success": False,
-            #         "message": "Outside working hours",
-            #         "error": {"code": "OUTSIDE_WORKING_HOURS", "details": "Punch in is only allowed between 6 AM and 10 PM"}
-            #     }
-
-            # Validate location if provided and generate address
+            # Generate address from coordinates if location provided
             if location and location.get("latitude") and location.get("longitude"):
                 lat = float(location["latitude"])
                 lng = float(location["longitude"])
-                is_within_range, distance = self._validate_location(lat, lng)
-                
-                if not is_within_range:
-                    return {
-                        "success": False,
-                        "message": "Location out of range",
-                        "error": {"code": "LOCATION_OUT_OF_RANGE", "details": f"You are {distance:.1f} meters away from the office. Please be within {self.office_location['radius']} meters to punch in."}
-                    }
                 
                 # Generate address from coordinates
                 address = self._get_address_from_coordinates(lat, lng)
@@ -314,8 +299,8 @@ class AppDashboardService:
             if existing_attendance:
                 return {
                     "success": False,
-                    "message": "Already punched in today",
-                    "error": {"code": "ALREADY_PUNCHED_IN", "details": "You have already punched in for this date"}
+                    "message": "Already started attendance today",
+                    "error": {"code": "ALREADY_STARTED", "details": "You have already started attendance for this date"}
                 }
 
             # Create attendance record
@@ -328,7 +313,7 @@ class AppDashboardService:
                 "punch_in_longitude": location.get("longitude") if location else None,
                 "punch_in_accuracy": location.get("accuracy") if location else None,
                 "punch_in_address": location.get("address") if location else None,
-                "punch_in_notes": notes,
+                "punch_in_notes": "",
                 "punch_in_timestamp": punch_datetime.timestamp(),
                 "status": "in",
                 "created_at": datetime.now(self.timezone).isoformat(),
@@ -340,7 +325,7 @@ class AppDashboardService:
             if result.inserted_id:
                 return {
                     "success": True,
-                    "message": "Punch in successful",
+                    "message": "Attendance started successfully",
                     "data": {
                         "attendanceId": str(result.inserted_id),
                         "status": "in",
@@ -353,56 +338,51 @@ class AppDashboardService:
             else:
                 return {
                     "success": False,
-                    "message": "Failed to record punch in",
+                    "message": "Failed to start attendance",
                     "error": {"code": "DATABASE_ERROR", "details": "Could not save attendance record"}
                 }
 
         except Exception as e:
             return {
                 "success": False,
-                "message": f"Punch in failed: {str(e)}",
+                "message": f"Attendance start failed: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
-    def punch_out(self, user_id, location=None, notes=""):
-        """Punch out for attendance"""
+    def stop_attend(self, user_id, attendance_id, location=None):
+        """Stop workday attendance (Punch-out)"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id)})
             if not user:
                 return {
                     "success": False,
-                    "message": "User not found",
+                    "message": "User does not exist",
                     "error": {"code": "USER_NOT_FOUND", "details": "User does not exist"}
                 }
 
-            # Generate current date and time in Asia/Kolkata timezone
-            current_datetime = datetime.now(self.timezone)
-            punch_date = current_datetime.strftime("%Y-%m-%d")
-            punch_time = current_datetime.strftime("%H:%M:%S")
-            punch_datetime = current_datetime
+            # Check if user is active
+            if user.get('employment_status') != 'Active':
+                return {
+                    "success": False,
+                    "message": "User account is not active",
+                    "error": {"code": "ACCOUNT_INACTIVE", "details": "User account is not active"}
+                }
 
-            # Validate location if provided and generate address
-            if location and location.get("latitude") and location.get("longitude"):
-                lat = float(location["latitude"])
-                lng = float(location["longitude"])
-                is_within_range, distance = self._validate_location(lat, lng)
-                
-                if not is_within_range:
-                    return {
-                        "success": False,
-                        "message": "Location out of range",
-                        "error": {"code": "LOCATION_OUT_OF_RANGE", "details": f"You are {distance:.1f} meters away from the office. Please be within {self.office_location['radius']} meters to punch out."}
-                    }
-                
-                # Generate address from coordinates
-                address = self._get_address_from_coordinates(lat, lng)
-                location["address"] = address
+            # Validate attendance_id
+            try:
+                attendance_object_id = ObjectId(attendance_id)
+            except Exception:
+                return {
+                    "success": False,
+                    "message": "Invalid attendance ID format",
+                    "error": {"code": "INVALID_ATTENDANCE_ID", "details": "Attendance ID must be a valid ObjectId"}
+                }
 
-            # Find existing attendance record for the given date
+            # Find existing attendance record
             existing_attendance = self.attendance_collection.find_one({
+                "_id": attendance_object_id,
                 "user_id": user_id,
-                "date": punch_date,
                 "punch_in_time": {"$exists": True},
                 "punch_out_time": {"$exists": False}
             })
@@ -411,7 +391,7 @@ class AppDashboardService:
                 # Check if user has already punched out today
                 completed_attendance = self.attendance_collection.find_one({
                     "user_id": user_id,
-                    "date": punch_date,
+                    "date": datetime.now(self.timezone).strftime("%Y-%m-%d"),
                     "punch_in_time": {"$exists": True},
                     "punch_out_time": {"$exists": True}
                 })
@@ -419,64 +399,201 @@ class AppDashboardService:
                 if completed_attendance:
                     return {
                         "success": False,
-                        "message": "Already punched out today",
-                        "error": {"code": "ALREADY_PUNCHED_OUT", "details": "You have already punched out for today"}
+                        "message": "Already stopped attendance today",
+                        "error": {"code": "ALREADY_STOPPED", "details": "You have already stopped attendance for today"}
                     }
                 else:
                     return {
                         "success": False,
-                        "message": "No punch in found",
-                        "error": {"code": "NO_PUNCH_IN", "details": "Please punch in before punching out"}
+                        "message": "No active attendance found",
+                        "error": {"code": "NO_ACTIVE_ATTENDANCE", "details": "Please start attendance before stopping it"}
                     }
+
+            # Generate current date and time in Asia/Kolkata timezone
+            current_datetime = datetime.now(self.timezone)
+            punch_out_time = current_datetime.strftime("%H:%M:%S")
+            punch_out_datetime = current_datetime
+
+            # Generate address from coordinates if location provided
+            if location and location.get("latitude") and location.get("longitude"):
+                lat = float(location["latitude"])
+                lng = float(location["longitude"])
+                
+                # Generate address from coordinates
+                address = self._get_address_from_coordinates(lat, lng)
+                location["address"] = address
 
             # Calculate working hours
             punch_in_time = datetime.fromisoformat(existing_attendance['punch_in_time'])
-            working_hours = (punch_datetime - punch_in_time).total_seconds() / 3600
+            working_hours = (punch_out_datetime - punch_in_time).total_seconds() / 3600
 
             # Update attendance record with punch out
             update_data = {
-                "punch_out_time": punch_datetime.isoformat(),
+                "punch_out_time": punch_out_datetime.isoformat(),
                 "punch_out_latitude": location.get("latitude") if location else None,
                 "punch_out_longitude": location.get("longitude") if location else None,
                 "punch_out_accuracy": location.get("accuracy") if location else None,
                 "punch_out_address": location.get("address") if location else None,
-                "punch_out_notes": notes,
-                "punch_out_timestamp": punch_datetime.timestamp(),
+                "punch_out_timestamp": punch_out_datetime.timestamp(),
                 "working_hours": round(working_hours, 2),
                 "status": "completed",
                 "updated_at": datetime.now(self.timezone).isoformat()
             }
 
             result = self.attendance_collection.update_one(
-                {"_id": existing_attendance["_id"]},
+                {"_id": attendance_object_id},
                 {"$set": update_data}
             )
 
             if result.modified_count > 0:
+                # Format working hours as HH:MM
+                hours = int(working_hours)
+                minutes = int((working_hours - hours) * 60)
+                formatted_working_hours = f"{hours:02d}:{minutes:02d}"
+                
                 return {
                     "success": True,
-                    "message": "Punch out successful",
+                    "message": "Attendance stopped successfully",
                     "data": {
-                        "attendanceId": str(existing_attendance["_id"]),
+                        "attendanceId": str(attendance_object_id),
                         "status": "completed",
-                        "punchTime": self._format_time(punch_time),
-                        "punchDateTime": punch_datetime.isoformat(),
+                        "punchOutTime": self._format_time(punch_out_time),
+                        "punchOutDateTime": punch_out_datetime.isoformat(),
+                        "working_hours": formatted_working_hours,
                         "location": location or {},
-                        "duration": self._format_duration(working_hours),
-                        "nextAction": "completed"
                     }
                 }
             else:
                 return {
                     "success": False,
-                    "message": "Failed to record punch out",
+                    "message": "Could not update attendance record",
                     "error": {"code": "DATABASE_ERROR", "details": "Could not update attendance record"}
                 }
 
         except Exception as e:
             return {
                 "success": False,
-                "message": f"Punch out failed: {str(e)}",
+                "message": f"Attendance stop failed: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def upload_attendance_image(self, user_id, attendance_id, image_file):
+        """Upload attendance image for a specific attendance record"""
+        try:
+            # Check if user exists
+            user = self.users_collection.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return {
+                    "success": False,
+                    "message": "User does not exist",
+                    "error": {"code": "USER_NOT_FOUND", "details": "User does not exist"}
+                }
+
+            # Check if user is active
+            if user.get('employment_status') != 'Active':
+                return {
+                    "success": False,
+                    "message": "User account is not active",
+                    "error": {"code": "ACCOUNT_INACTIVE", "details": "User account is not active"}
+                }
+
+            # Validate attendance_id
+            try:
+                attendance_object_id = ObjectId(attendance_id)
+            except Exception:
+                return {
+                    "success": False,
+                    "message": "Invalid attendance ID format",
+                    "error": {"code": "INVALID_ATTENDANCE_ID", "details": "Attendance ID must be a valid ObjectId"}
+                }
+
+            # Find existing attendance record
+            existing_attendance = self.attendance_collection.find_one({
+                "_id": attendance_object_id,
+                "user_id": user_id
+            })
+
+            if not existing_attendance:
+                return {
+                    "success": False,
+                    "message": "Attendance record not found",
+                    "error": {"code": "ATTENDANCE_NOT_FOUND", "details": "No attendance record found with this ID"}
+                }
+
+            # Create upload directory if it doesn't exist
+            import os
+            upload_dir = "uploads/sfa_uploads/attendance"
+            os.makedirs(upload_dir, exist_ok=True)
+            print(f"Upload directory created/verified: {upload_dir}")
+            print(f"Directory exists: {os.path.exists(upload_dir)}")
+
+            # Generate unique filename
+            import uuid
+            file_extension = os.path.splitext(image_file.filename)[1].lower()
+            unique_filename = f"{uuid.uuid4().hex}{file_extension}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            print(f"Generated file path: {file_path}")
+            print(f"Original filename: {image_file.filename}")
+            print(f"File extension: {file_extension}")
+            print(f"Unique filename: {unique_filename}")
+
+            # Save image file
+            try:
+                # Reset file pointer to beginning
+                image_file.file.seek(0)
+                
+                with open(file_path, "wb") as buffer:
+                    content = image_file.file.read()
+                    buffer.write(content)
+                    
+                print(f"Image saved successfully at: {file_path}")
+                print(f"File size: {len(content)} bytes")
+                
+            except Exception as e:
+                print(f"Error saving image: {str(e)}")
+                return {
+                    "success": False,
+                    "message": "Failed to save image file",
+                    "error": {"code": "FILE_SAVE_ERROR", "details": f"Could not save image: {str(e)}"}
+                }
+
+            # Update attendance record with image info
+            update_data = {
+                "stop_attendance_image_path": file_path,
+                "stop_attendance_image_filename": unique_filename,
+                "stop_attendance_image_original_name": image_file.filename,
+                "stop_attendance_image_uploaded_at": datetime.now(self.timezone).isoformat(),
+                "updated_at": datetime.now(self.timezone).isoformat()
+            }
+
+            result = self.attendance_collection.update_one(
+                {"_id": attendance_object_id},
+                {"$set": update_data}
+            )
+
+            if result.modified_count > 0:
+                return {
+                    "success": True,
+                    "message": "Attendance image uploaded successfully",
+                    "data": {
+                        "attendanceId": str(attendance_object_id),
+                        "imagePath": file_path,
+                        "imageFilename": unique_filename,
+                        "originalFilename": image_file.filename,
+                        "uploadedAt": update_data["stop_attendance_image_uploaded_at"]
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "Could not update attendance record",
+                    "error": {"code": "DATABASE_ERROR", "details": "Could not update attendance record"}
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Image upload failed: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
@@ -727,3 +844,116 @@ class AppDashboardService:
             return round(working_hours, 2)
         except:
             return 0 
+
+    def get_today_attendance(self, user_id):
+        """Get today's attendance status for the user"""
+        try:
+            # Check if user exists
+            user = self.users_collection.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return {
+                    "success": False,
+                    "message": "User does not exist",
+                    "error": {"code": "USER_NOT_FOUND", "details": "User does not exist"}
+                }
+
+            # Check if user is active
+            if user.get('employment_status') != 'Active':
+                return {
+                    "success": False,
+                    "message": "User account is not active",
+                    "error": {"code": "ACCOUNT_INACTIVE", "details": "User account is not active"}
+                }
+
+            # Get today's date in Asia/Kolkata timezone
+            today = datetime.now(self.timezone).strftime("%Y-%m-%d")
+            
+            # Find today's attendance record
+            attendance_record = self.attendance_collection.find_one({
+                "user_id": user_id,
+                "date": today
+            })
+
+            # Initialize response data
+            attendance_data = {
+                "date": today,
+                "status": "not_started",
+                "attendance_id": None,
+                "punch_in_time": None,
+                "punch_out_time": None,
+                "working_hours": "00:00",
+                "kms": "0",
+                "punch_in_location": None,
+                "punch_out_location": None
+            }
+
+            if attendance_record:
+                # Check if user has punched in
+                if attendance_record.get("punch_in_time"):
+                    punch_in_time = attendance_record.get("punch_in_time")
+                    attendance_data["attendance_id"] = str(attendance_record["_id"])
+                    attendance_data["punch_in_time"] = self._format_time(punch_in_time.split('T')[1]) if 'T' in punch_in_time else self._format_time(punch_in_time)
+                    attendance_data["punch_in_location"] = {
+                        "latitude": attendance_record.get("punch_in_latitude"),
+                        "longitude": attendance_record.get("punch_in_longitude"),
+                        "address": attendance_record.get("punch_in_address", "")
+                    }
+                    
+                    # Check if user has punched out
+                    if attendance_record.get("punch_out_time"):
+                        punch_out_time = attendance_record.get("punch_out_time")
+                        attendance_data["status"] = "completed"
+                        attendance_data["punch_out_time"] = self._format_time(punch_out_time.split('T')[1]) if 'T' in punch_out_time else self._format_time(punch_out_time)
+                        attendance_data["punch_out_location"] = {
+                            "latitude": attendance_record.get("punch_out_latitude"),
+                            "longitude": attendance_record.get("punch_out_longitude"),
+                            "address": attendance_record.get("punch_out_address", "")
+                        }
+                        
+                        # Calculate working hours
+                        if attendance_record.get("working_hours"):
+                            hours = float(attendance_record["working_hours"])
+                            hours_int = int(hours)
+                            minutes = int((hours - hours_int) * 60)
+                            attendance_data["working_hours"] = f"{hours_int:02d}:{minutes:02d}"
+                        
+                        # Calculate distance between punch-in and punch-out locations
+                        if (attendance_record.get("punch_in_latitude") and attendance_record.get("punch_in_longitude") and 
+                            attendance_record.get("punch_out_latitude") and attendance_record.get("punch_out_longitude")):
+                            try:
+                                distance = self._calculate_distance(
+                                    attendance_record["punch_in_latitude"], attendance_record["punch_in_longitude"],
+                                    attendance_record["punch_out_latitude"], attendance_record["punch_out_longitude"]
+                                )
+                                attendance_data["kms"] = f"{distance/1000:.1f}"  # Convert meters to kilometers
+                            except:
+                                attendance_data["kms"] = "0"
+                        else:
+                            attendance_data["kms"] = "0"
+                    else:
+                        # User has punched in but not punched out
+                        attendance_data["status"] = "in_progress"
+                        
+                        # Calculate current working hours
+                        try:
+                            punch_in_dt = datetime.fromisoformat(punch_in_time)
+                            current_time = datetime.now(self.timezone)
+                            working_hours = (current_time - punch_in_dt).total_seconds() / 3600
+                            hours_int = int(working_hours)
+                            minutes = int((working_hours - hours_int) * 60)
+                            attendance_data["working_hours"] = f"{hours_int:02d}:{minutes:02d}"
+                        except:
+                            attendance_data["working_hours"] = "00:00"
+
+            return {
+                "success": True,
+                "message": "Today's attendance retrieved successfully",
+                "data": attendance_data
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get today's attendance: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            } 

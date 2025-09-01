@@ -29,8 +29,8 @@ async def get_current_user(request: Request):
     return payload
 
 @router.post("/login")
-async def app_login(request: Request):
-    """HRMS Pro mobile app login endpoint"""
+async def sfa_mobile_login(request: Request):
+    """SFA mobile app login endpoint - supports both employees and sales users"""
     try:
         body = await request.json()
         employee_id = body.get("employeeId")
@@ -42,12 +42,12 @@ async def app_login(request: Request):
         if not employee_id or not password:
             return format_response(
                 success=False,
-                msg="Employee ID and password are required.",
+                msg="User ID and password are required.",
                 statuscode=400,
                 data={
                     "error": {
                         "code": "VALIDATION_ERROR",
-                        "details": "employeeId and password are required"
+                        "details": "User ID (Employee ID/Email/Mobile) and password are required"
                     }
                 }
             )
@@ -61,7 +61,7 @@ async def app_login(request: Request):
                 data={
                     "error": {
                         "code": "VALIDATION_ERROR",
-                        "details": "employeeId must be between 3 and 50 characters"
+                        "details": "User ID must be between 3 and 50 characters"
                     }
                 }
             )
@@ -75,7 +75,7 @@ async def app_login(request: Request):
                 data={
                     "error": {
                         "code": "VALIDATION_ERROR",
-                        "details": "password must be between 6 and 100 characters"
+                        "details": "Password must be between 6 and 100 characters"
                     }
                 }
             )
@@ -86,18 +86,18 @@ async def app_login(request: Request):
         if not result:
             return format_response(
                 success=False,
-                msg="Invalid Employee ID or Password",
+                msg="Invalid User ID or Password",
                 statuscode=401,
                 data={
                     "error": {
                         "code": "INVALID_CREDENTIALS",
-                        "details": "The provided employee ID or password is incorrect"
+                        "details": "The provided User ID or password is incorrect"
                     }
                 }
             )
         
         # Check for error in result
-        if not result.get("success", True):
+        if result and result.get("error"):
             error_data = result.get("error", {})
             return format_response(
                 success=False,
@@ -128,147 +128,9 @@ async def app_login(request: Request):
             }
         )
 
-@router.post("/hrms-login")
-async def hrms_pro_login(request: Request):
-    """HRMS Pro login endpoint at /api/auth/login"""
-    try:
-        body = await request.json()
-        employee_id = body.get("employeeId")
-        password = body.get("password")
-        device_info = body.get("deviceInfo", {})
-        remember_me = body.get("rememberMe", False)
-        
-        # Validation
-        if not employee_id or not password:
-            return format_response(
-                success=False,
-                msg="Employee ID and password are required.",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "employeeId and password are required"
-                    }
-                }
-            )
-        
-        # Validate employee ID length
-        if len(employee_id) < 3 or len(employee_id) > 50:
-            return format_response(
-                success=False,
-                msg="Validation failed",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "employeeId must be between 3 and 50 characters"
-                    }
-                }
-            )
-        
-        # Validate password length
-        if len(password) < 6 or len(password) > 100:
-            return format_response(
-                success=False,
-                msg="Validation failed",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "password must be between 6 and 100 characters"
-                    }
-                }
-            )
-        
-        service = AppUserAuthService()
-        result = service.login(employee_id, password, device_info, remember_me)
-        
-        if not result:
-            return format_response(
-                success=False,
-                msg="Invalid Employee ID or Password",
-                statuscode=401,
-                data={
-                    "error": {
-                        "code": "INVALID_CREDENTIALS",
-                        "details": "The provided employee ID or password is incorrect"
-                    }
-                }
-            )
-        
-        # Check for error in result
-        if not result.get("success", True):
-            error_data = result.get("error", {})
-            return format_response(
-                success=False,
-                msg=error_data.get("details", "Login failed"),
-                statuscode=401,
-                data={"error": error_data}
-            )
-        
-        # Add timestamp to response
-        result["timestamp"] = datetime.utcnow().isoformat()
-        
-        return format_response(
-            success=True,
-            msg="Login successful",
-            statuscode=200,
-            data=result
-        )
-    except Exception as e:
-        return format_response(
-            success=False,
-            msg="Internal server error",
-            statuscode=500,
-            data={
-                "error": {
-                    "code": "SERVER_ERROR",
-                    "details": "An unexpected error occurred"
-                }
-            }
-        )
 
-@router.post("/register")
-async def app_register(request: Request):
-    """Mobile app user registration endpoint"""
-    try:
-        body = await request.json()
-        email = body.get("email")
-        password = body.get("password")
-        full_name = body.get("full_name")
-        
-        if not email or not password or not full_name:
-            return format_response(
-                success=False,
-                msg="Email, password, and full name are required.",
-                statuscode=400,
-                data={"user": None, "message": "Email, password, and full name are required."}
-            )
-        
-        service = AppUserAuthService()
-        result = service.register(email, password, full_name)
-        
-        if not result.get("success"):
-            return format_response(
-                success=False,
-                msg=result.get("message", "Registration failed"),
-                statuscode=400,
-                data={"user": None, "message": result.get("message", "Registration failed")}
-            )
-        
-        return format_response(
-            success=True,
-            msg="Registration successful",
-            statuscode=201,
-            data=result
-        )
-    except Exception as e:
-        return format_response(
-            success=False,
-            msg="Something went wrong.",
-            statuscode=500,
-            data={"user": None, "message": str(e)}
-        )
+
+
 
 @router.post("/logout")
 async def app_logout(current_user: dict = Depends(get_current_user)):
