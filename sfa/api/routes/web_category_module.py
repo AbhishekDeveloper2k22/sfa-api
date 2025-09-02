@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Response, HTTPException
+from fastapi import APIRouter, Request, Response, HTTPException, UploadFile, File, Form
 from sfa.middlewares.web_category_middleware import CategoryDataProcessor
 import traceback
 
@@ -10,6 +10,16 @@ async def add_category(request: Request):
     instanceClass = CategoryDataProcessor()
     try:
         result = instanceClass.category_add(request_data)
+        return result
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+
+@router.post("/category_image")
+async def category_image(category_id: str = Form(...), file: UploadFile = File(...)):
+    instanceClass = CategoryDataProcessor()
+    try:
+        result = instanceClass.category_image_update(category_id, file)
         return result
     except Exception as e:
         tb = traceback.format_exc()

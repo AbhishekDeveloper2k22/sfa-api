@@ -38,4 +38,8 @@ class CategoryDataProcessor:
         processor = category_tool()
         result = processor.category_details(request_data)
         return result
+
+    def category_image_update(self, category_id, upload_file):
+        processor = category_tool()
+        return processor.update_category_image(category_id, upload_file)
     

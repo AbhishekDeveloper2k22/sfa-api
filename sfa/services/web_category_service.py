@@ -6,6 +6,8 @@ from bson import ObjectId
 from sfa.database import client1
 from datetime import datetime, timedelta
 import re
+import os
+import uuid
 
 class category_tool:
     def __init__(self):
@@ -219,4 +221,33 @@ class category_tool:
                 "message": f"Error retrieving category details: {str(e)}",
                 "data": None
             }
+
+    def update_category_image(self, category_id: str, upload_file):
+        if not category_id:
+            return {"success": False, "message": "Category ID is required"}
+        try:
+            cat = self.categories.find_one({"_id": ObjectId(category_id)})
+            if not cat:
+                return {"success": False, "message": "Category not found"}
+        except Exception as e:
+            return {"success": False, "message": f"Invalid category ID: {e}"}
+
+        base_dir = os.path.join("uploads", "sfa", "categories")
+        os.makedirs(base_dir, exist_ok=True)
+
+        original = upload_file.filename or "file"
+        _, ext = os.path.splitext(original)
+        unique_name = f"cat_{uuid.uuid4().hex}{ext.lower()}"
+        file_path = os.path.join(base_dir, unique_name)
+
+        with open(file_path, 'wb') as f:
+            f.write(upload_file.file.read())
+
+        res = self.categories.update_one({"_id": ObjectId(category_id)}, {"$set": {
+            "image": unique_name,
+            "image_updated_at": self.current_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        }})
+        if res.matched_count > 0:
+            return {"success": True, "message": "Category image updated", "file_name": unique_name}
+        return {"success": False, "message": "Failed to update image"}
     
