@@ -14,6 +14,8 @@ from sfa.api.routes import app_ai_agent_module
 from sfa.api.routes import web_user_module
 from sfa.api.routes import web_category_module
 from sfa.api.routes import web_product_module
+from sfa.api.routes import web_lead_module
+from sfa.api.routes import web_customer_module
 
 router = APIRouter()
 
@@ -37,5 +39,7 @@ router.include_router(app_ai_agent_module.router, prefix="/api/app/ai-agent")
 router.include_router(web_user_module.router, prefix="/api/web")
 router.include_router(web_category_module.router, prefix="/api/web")
 router.include_router(web_product_module.router, prefix="/api/web")
+router.include_router(web_lead_module.router, prefix="/api/web")
+router.include_router(web_customer_module.router, prefix="/api/web")
 
 
