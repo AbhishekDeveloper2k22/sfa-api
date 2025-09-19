@@ -6,6 +6,7 @@ from bson import ObjectId
 from sfa.database import client1
 from datetime import datetime, timedelta
 import re
+from passlib.hash import bcrypt
 
 class users_tool:
     def __init__(self):
@@ -90,6 +91,12 @@ class users_tool:
         request_data['del'] = 0
         request_data['last_login'] = self.current_datetime.strftime("%Y-%m-%d")
         
+        # Hash password if provided and store in hash_password, do not store plaintext
+        if request_data.get('password'):
+            try:
+                request_data['hash_password'] = bcrypt.hash(request_data['password'])
+            except Exception:
+                pass
         # Add default permissions
         request_data['permissions'] = {
             "view": True,
@@ -141,6 +148,13 @@ class users_tool:
         update_data = request_data.copy()
         if '_id' in update_data:
             del update_data['_id']
+        
+        # If password provided, hash and set hash_password; do not store plaintext
+        if update_data.get('password'):
+            try:
+                update_data['hash_password'] = bcrypt.hash(update_data['password'])
+            except Exception:
+                pass
         
         result = self.users.update_one({"_id": ObjectId(request_data['_id'])}, {"$set": update_data})
         
