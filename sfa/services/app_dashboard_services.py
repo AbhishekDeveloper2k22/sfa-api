@@ -103,8 +103,6 @@ class AppDashboardService:
             # If not cached, resolve address from OpenStreetMap API
             resolved_address = self._resolve_address_from_nominatim(latitude, longitude)
 
-
-            
             # Cache the resolved address for future use
             if resolved_address:
                 self._cache_address(latitude, longitude, resolved_address)
