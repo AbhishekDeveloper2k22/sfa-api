@@ -14,6 +14,8 @@ class DataProcessor:
             query = {"type":"non-lead"}
         if request_data['name'] == "allowance":
             query = {"customer_type":0}
+        if request_data['name'] == "designation":
+            query = {"customer_type":request_data['customer_type'],"type":"designation"}
         result = processor.users_types(query)
         return result
         
