@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, Path, Depends, H
 import os
 from uuid import uuid4
 from sfa.services.employee_service import EmployeeService  
+from sfa.utils.auth import get_current_user
 from sfa.utils.response import format_response, convert_objectid_to_str
 import datetime
 from typing import List, Optional
@@ -21,7 +22,7 @@ def save_upload_file(upload_file: UploadFile, unique_name: str):
 router = APIRouter()
 
 @router.post("/basic-info")
-async def basic_details(request: Request):
+async def basic_details(request: Request, current_user: dict = Depends(get_current_user)):
     request_json = await request.json()
     
     # Check if this is an edit operation
