@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
 from sfa.api.routes import router as sfa_router
+from field_squad.api.routes import router as field_squad_router
 import logging
 import os
 from app.middlewares.logging_middleware import log_requests  # We'll move the middleware
@@ -50,4 +51,8 @@ app.include_router(
 app.include_router(
     sfa_router,
     prefix="/sfa"  # This will prefix all routes with /api
+)
+app.include_router(
+    field_squad_router,
+    prefix="/field_squad"  # This will prefix all routes with /api
 )
