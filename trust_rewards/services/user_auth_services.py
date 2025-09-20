@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from sfa.database import client1
+from trust_rewards.database import client1
 from dotenv import load_dotenv
 from bson import ObjectId
 import jwt
