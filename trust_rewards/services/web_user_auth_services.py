@@ -24,7 +24,6 @@ class UserAuthService(BaseAuthService):
     def authenticate_user(self, email, password):
         # Find by email in trust_rewards.users (no role restriction)
         user = self.user_collection.find_one({"email": email})
-        print("user",user)
         if not user or not user.get('hash_password'):
             return None
         if not bcrypt.verify(password, user['hash_password']):
@@ -33,7 +32,8 @@ class UserAuthService(BaseAuthService):
 
     def create_jwt_token(self, user):
         payload = {
-            'user_id': str(user['_id']),
+            '_id': str(user['_id']),
+            'user_id': user['user_id'],
             'email': user['email'],
             'role': user.get('role', 'Admin'),
             'exp': datetime.utcnow() + timedelta(minutes=JWT_EXP_DELTA_MINUTES)
