@@ -1,21 +1,10 @@
 from fastapi import APIRouter
 from .base import router as base_router
-from trust_rewards.api.routes import employee_module
-from trust_rewards.api.routes import app_user_auth_module
-from trust_rewards.api.routes import app_dashboard_module
-from trust_rewards.api.routes import app_attendance_module
-from trust_rewards.api.routes import app_request_module
-from trust_rewards.api.routes import app_sidebar_module
-from trust_rewards.api.routes import attendance_module
-from trust_rewards.api.routes import app_ai_agent_module
+from .web_user_auth_module import router as web_user_auth_module
+from .web_skilled_worker_module import router as web_skilled_worker_module
 
 #web
-from trust_rewards.api.routes import web_user_module
-from trust_rewards.api.routes import web_user_auth_module
-from trust_rewards.api.routes import web_category_module
-from trust_rewards.api.routes import web_product_module
-from trust_rewards.api.routes import web_lead_module
-from trust_rewards.api.routes import web_customer_module
+
 
 router = APIRouter()
 
@@ -25,21 +14,11 @@ router.include_router(
     tags=["base"]
 )
 
-router.include_router(employee_module.router, prefix="/api/employees")
-router.include_router(app_user_auth_module.router, prefix="/api/app/auth")
-router.include_router(app_dashboard_module.router, prefix="/api/app/dashboard")
-router.include_router(app_attendance_module.router, prefix="/api/app/attendance")
-router.include_router(app_request_module.router, prefix="/api/app/request")
-router.include_router(app_sidebar_module.router, prefix="/api/app/sidebar")
-router.include_router(attendance_module.router, prefix="/api/attendance")
-router.include_router(app_ai_agent_module.router, prefix="/api/app/ai-agent")
+# router.include_router(app_user_auth_module.router, prefix="/api/app/auth")
 
 #web routes
-router.include_router(web_user_module.router, prefix="/api/web")
-router.include_router(web_user_auth_module.router, prefix="/api/web")
-router.include_router(web_category_module.router, prefix="/api/web")
-router.include_router(web_product_module.router, prefix="/api/web")
-router.include_router(web_lead_module.router, prefix="/api/web")
-router.include_router(web_customer_module.router, prefix="/api/web")
+router.include_router(web_user_auth_module, prefix="/api/web/auth")
+router.include_router(web_skilled_worker_module, prefix="/api/web/skilled_workers")
+
 
 

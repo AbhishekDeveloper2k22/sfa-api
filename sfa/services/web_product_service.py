@@ -5,6 +5,7 @@ from sfa.database import client1
 from datetime import datetime
 import os
 import uuid
+from typing import Union, Optional
 
 
 class product_tool:
@@ -43,7 +44,7 @@ class product_tool:
             }
         return {"exists": False}
 
-    def _attach_category(self, request_data: dict) -> tuple[bool, dict | None, str | None]:
+    def _attach_category(self, request_data: dict) -> tuple[bool, Optional[dict], Optional[str]]:
         cat_id = request_data.get('category_id') or request_data.get('categoryId')
         cat_name = request_data.get('category_name')
 

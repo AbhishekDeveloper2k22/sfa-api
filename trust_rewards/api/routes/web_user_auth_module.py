@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from trust_rewards.services.user_auth_services import UserAuthService
+from trust_rewards.services.web_user_auth_services import UserAuthService
 from trust_rewards.utils.response import format_response
 
 router = APIRouter()
