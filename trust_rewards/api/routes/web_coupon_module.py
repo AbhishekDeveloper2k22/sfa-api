@@ -48,7 +48,7 @@ async def generate_points_coupons(request: Request, current_user: dict = Depends
             }
         )
 
-@router.post("/coupons_list")
+@router.post("/coupon_code_list")
 async def get_coupons_list(request: Request, current_user: dict = Depends(get_current_user)):
     """Get paginated list of individual coupons with filters"""
     try:
@@ -68,6 +68,46 @@ async def get_coupons_list(request: Request, current_user: dict = Depends(get_cu
         return format_response(
             success=True,
             msg="Coupons list retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+        
+    except Exception as e:
+        tb = traceback.format_exc()
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": str(e),
+                    "traceback": tb
+                }
+            }
+        )
+
+@router.post("/coupon_code_list_csv")
+async def get_coupon_code_list_csv(request: Request, current_user: dict = Depends(get_current_user)):
+    """Download coupon codes as CSV for a specific batch"""
+    try:
+        request_data = await request.json()
+        
+        service = CouponService()
+        result = service.get_coupon_code_list_csv(request_data)
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to generate CSV"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        # Return CSV data using format_response
+        return format_response(
+            success=True,
+            msg=result.get("message", "CSV generated successfully"),
             statuscode=200,
             data=result.get("data", {})
         )
