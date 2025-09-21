@@ -86,8 +86,12 @@ class CouponService:
                     "error": {"code": "VALIDATION_ERROR", "details": "Duplicate batch number"}
                 }
 
-            # Step 1: Create coupon_master record
+            # Step 1: Get next coupon_id (auto-increment)
+            next_coupon_id = self._get_next_coupon_id()
+            
+            # Step 2: Create coupon_master record
             master_doc = {
+                "coupon_id": next_coupon_id,
                 "batch_number": batch_number,
                 "points_value": points_value,
                 "number_of_coupons": number_of_coupons,
@@ -135,23 +139,18 @@ class CouponService:
                         }
                     }
                 )
-                
-                generated_coupons.append({
-                    "coupon_id": str(coupon_id),
-                    "coupon_code": coupon_code
-                })
 
             return {
                 "success": True,
                 "message": f"Successfully generated {number_of_coupons} points redemption coupons",
                 "data": {
+                    "coupon_id": next_coupon_id,
                     "coupon_master_id": str(coupon_master_id),
                     "batch_number": batch_number,
                     "points_value": points_value,
                     "number_of_coupons": number_of_coupons,
                     "valid_from": valid_from,
                     "valid_to": valid_to,
-                    "generated_coupons": generated_coupons,
                     "summary": f"This generated {number_of_coupons} points redemption coupons with {points_value} points each for batch {batch_number}. Skilled workers can scan these coupons to add points to their wallet."
                 }
             }
@@ -283,7 +282,11 @@ class CouponService:
 
             # Build query
             query = {}
-            if status != 'all':
+            if status == 'expired':
+                # Filter for expired batches (valid_to date is in the past)
+                current_date = self.current_datetime.strftime("%Y-%m-%d")
+                query['valid_to'] = {"$lt": current_date}
+            elif status != 'all':
                 query['status'] = status
 
             # Get total count
@@ -293,9 +296,14 @@ class CouponService:
             pipeline = [
                 {"$match": query},
                 {
+                    "$addFields": {
+                        "coupon_master_id_str": {"$toString": "$_id"}
+                    }
+                },
+                {
                     "$lookup": {
                         "from": "coupon_code",
-                        "localField": "_id",
+                        "localField": "coupon_master_id_str",
                         "foreignField": "coupon_master_id",
                         "as": "coupons"
                     }
@@ -310,12 +318,27 @@ class CouponService:
                                     "cond": {"$eq": ["$$this.is_redeemed", True]}
                                 }
                             }
+                        },
+                        "usage": {
+                            "$concat": [
+                                {"$toString": {
+                                    "$size": {
+                                        "$filter": {
+                                            "input": "$coupons",
+                                            "cond": {"$eq": ["$$this.is_redeemed", True]}
+                                        }
+                                    }
+                                }},
+                                "/",
+                                {"$toString": {"$size": "$coupons"}}
+                            ]
                         }
                     }
                 },
                 {
                     "$project": {
-                        "coupons": 0  # Remove the coupons array to reduce response size
+                        "coupons": 0,  # Remove the coupons array to reduce response size
+                        "coupon_master_id_str": 0  # Remove the temporary field
                     }
                 },
                 {"$sort": {"created_at": -1, "created_time": -1}},
@@ -334,10 +357,14 @@ class CouponService:
             has_next = page < total_pages
             has_prev = page > 1
 
+            # Get stats data
+            stats = self.get_coupon_stats()
+
             return {
                 "success": True,
                 "data": {
                     "masters": masters,
+                    "stats": stats,
                     "pagination": {
                         "current_page": page,
                         "total_pages": total_pages,
@@ -355,3 +382,84 @@ class CouponService:
                 "message": f"Failed to get coupon master list: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
+
+    def get_coupon_stats(self) -> dict:
+        """Get coupon statistics for dashboard"""
+        try:
+            # Total QR Coupons (Total coupon codes)
+            total_coupons = self.coupon_code.count_documents({})
+            
+            # Active Coupons (Not redeemed)
+            active_coupons = self.coupon_code.count_documents({"is_redeemed": False})
+            
+            # Used Coupons (Redeemed)
+            used_coupons = self.coupon_code.count_documents({"is_redeemed": True})
+            
+            # Expired Coupons (valid_to date is in the past)
+            current_date = self.current_datetime.strftime("%Y-%m-%d")
+            expired_coupons = self.coupon_code.count_documents({"valid_to": {"$lt": current_date}})
+            
+            # Total Points (Sum of all coupon values)
+            pipeline = [
+                {"$group": {"_id": None, "total_points": {"$sum": "$coupon_value"}}}
+            ]
+            points_result = list(self.coupon_code.aggregate(pipeline))
+            total_points = points_result[0]["total_points"] if points_result else 0
+            
+            return {
+                "total_qr_coupons": total_coupons,
+                "active_coupons": active_coupons,
+                "used_coupons": used_coupons,
+                "expired_coupons": expired_coupons,
+                "total_points": total_points
+            }
+            
+        except Exception as e:
+            return {
+                "total_qr_coupons": 0,
+                "active_coupons": 0,
+                "used_coupons": 0,
+                "expired_coupons": 0,
+                "total_points": 0
+            }
+
+    def _get_next_coupon_id(self) -> str:
+        """Get next auto-incrementing coupon_id like COU-1, COU-2, etc."""
+        try:
+            # Find the highest coupon_id
+            pipeline = [
+                {
+                    "$project": {
+                        "coupon_id": 1,
+                        "numeric_part": {
+                            "$toInt": {
+                                "$substr": [
+                                    "$coupon_id",
+                                    4,  # Skip "COU-"
+                                    -1
+                                ]
+                            }
+                        }
+                    }
+                },
+                {"$sort": {"numeric_part": -1}},
+                {"$limit": 1}
+            ]
+            
+            result = list(self.coupon_master.aggregate(pipeline))
+            
+            if result and result[0].get('coupon_id'):
+                # Extract numeric part and increment
+                last_coupon_id = result[0]['coupon_id']
+                numeric_part = int(last_coupon_id.split('-')[1])
+                next_number = numeric_part + 1
+            else:
+                # First coupon
+                next_number = 1
+            
+            return f"COU-{next_number}"
+            
+        except Exception as e:
+            # Fallback: use timestamp-based ID
+            timestamp = int(self.current_datetime.timestamp())
+            return f"COU-{timestamp}"
