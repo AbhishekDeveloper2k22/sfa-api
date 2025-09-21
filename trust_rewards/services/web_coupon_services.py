@@ -86,8 +86,12 @@ class CouponService:
                     "error": {"code": "VALIDATION_ERROR", "details": "Duplicate batch number"}
                 }
 
-            # Step 1: Create coupon_master record
+            # Step 1: Get next coupon_id (auto-increment)
+            next_coupon_id = self._get_next_coupon_id()
+            
+            # Step 2: Create coupon_master record
             master_doc = {
+                "coupon_id": next_coupon_id,
                 "batch_number": batch_number,
                 "points_value": points_value,
                 "number_of_coupons": number_of_coupons,
@@ -111,6 +115,7 @@ class CouponService:
                     "coupon_value": points_value,
                     "valid_from": valid_from_date.strftime("%Y-%m-%d"),
                     "valid_to": valid_to_date.strftime("%Y-%m-%d"),
+                    "status": "active",
                     "is_redeemed": False,
                     "redeemed_by": None,
                     "redeemed_at": None,
@@ -135,23 +140,18 @@ class CouponService:
                         }
                     }
                 )
-                
-                generated_coupons.append({
-                    "coupon_id": str(coupon_id),
-                    "coupon_code": coupon_code
-                })
 
             return {
                 "success": True,
                 "message": f"Successfully generated {number_of_coupons} points redemption coupons",
                 "data": {
+                    "coupon_id": next_coupon_id,
                     "coupon_master_id": str(coupon_master_id),
                     "batch_number": batch_number,
                     "points_value": points_value,
                     "number_of_coupons": number_of_coupons,
                     "valid_from": valid_from,
                     "valid_to": valid_to,
-                    "generated_coupons": generated_coupons,
                     "summary": f"This generated {number_of_coupons} points redemption coupons with {points_value} points each for batch {batch_number}. Skilled workers can scan these coupons to add points to their wallet."
                 }
             }
@@ -164,8 +164,17 @@ class CouponService:
             }
 
     def get_coupons_list(self, request_data: dict) -> dict:
-        """Get paginated list of coupons with filters using aggregation"""
+        """Get paginated list of individual coupons for a specific batch"""
         try:
+            # Extract mandatory coupon_master_id
+            coupon_master_id = request_data.get('coupon_master_id')
+            if not coupon_master_id:
+                return {
+                    "success": False,
+                    "message": "coupon_master_id is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "Missing coupon_master_id"}
+                }
+
             # Extract pagination parameters
             page = request_data.get('page', 1)
             limit = request_data.get('limit', 10)
@@ -173,74 +182,41 @@ class CouponService:
 
             # Extract filters
             filters = request_data.get('filters', {})
-            batch_number = filters.get('batch_number')
             status = filters.get('status', 'all')
             is_redeemed = filters.get('is_redeemed')
 
-            # Build match conditions
-            match_conditions = {}
-            if batch_number:
-                match_conditions["master.batch_number"] = batch_number
+            # Build match conditions with mandatory coupon_master_id
+            match_conditions = {"coupon_master_id": coupon_master_id}
             if status != 'all':
-                match_conditions["master.status"] = status
+                match_conditions["status"] = status
             if is_redeemed is not None:
                 match_conditions["is_redeemed"] = is_redeemed
 
-            # Aggregation pipeline to join coupon_code with coupon_master
-            pipeline = [
-                {
-                    "$addFields": {
-                        "coupon_master_object_id": {"$toObjectId": "$coupon_master_id"}
-                    }
-                },
-                {
-                    "$lookup": {
-                        "from": "coupon_master",
-                        "localField": "coupon_master_object_id",
-                        "foreignField": "_id",
-                        "as": "master"
-                    }
-                },
-                {"$unwind": "$master"},
-                {"$match": match_conditions},
-                {
-                    "$project": {
-                        "_id": 1,
-                        "coupon_master_id": 1,
-                        "coupon_code": 1,
-                        "coupon_value": 1,
-                        "valid_from": 1,
-                        "valid_to": 1,
-                        "is_redeemed": 1,
-                        "redeemed_by": 1,
-                        "redeemed_at": 1,
-                        "created_at": 1,
-                        "created_time": 1,
-                        "batch_number": "$master.batch_number",
-                        "master_status": "$master.status",
-                        "coupon_master_object_id": 0
-                    }
-                },
-                {"$sort": {"created_at": -1, "created_time": -1}}
-            ]
-
             # Get total count
-            count_pipeline = pipeline + [{"$count": "total"}]
-            count_result = list(self.coupon_code.aggregate(count_pipeline))
-            total_count = count_result[0]["total"] if count_result else 0
+            total_count = self.coupon_code.count_documents(match_conditions)
             
-            # Add pagination
-            pipeline.extend([
-                {"$skip": skip},
-                {"$limit": limit}
-            ])
-            
-            # Execute aggregation
-            coupons = list(self.coupon_code.aggregate(pipeline))
+            # Get coupons with pagination
+            coupons = list(self.coupon_code.find(match_conditions).skip(skip).limit(limit).sort("created_at", -1))
             
             # Convert ObjectId to string
             for coupon in coupons:
                 coupon['_id'] = str(coupon['_id'])
+
+            # Get batch information for the coupon_master_id
+            batch_info = self.coupon_master.find_one({"_id": ObjectId(coupon_master_id)})
+            
+            # Calculate usage statistics
+            total_coupons = self.coupon_code.count_documents({"coupon_master_id": coupon_master_id})
+            used_coupons = self.coupon_code.count_documents({"coupon_master_id": coupon_master_id, "is_redeemed": True})
+            available_coupons = total_coupons - used_coupons
+            usage_rate = round((used_coupons / total_coupons * 100), 1) if total_coupons > 0 else 0
+            
+            # Calculate days left for validity
+            from datetime import datetime
+            days_left = 0
+            if batch_info and batch_info.get('valid_to'):
+                valid_to_date = datetime.strptime(batch_info['valid_to'], '%Y-%m-%d')
+                days_left = (valid_to_date - datetime.now()).days
 
             # Calculate pagination info
             total_pages = (total_count + limit - 1) // limit
@@ -250,6 +226,17 @@ class CouponService:
             return {
                 "success": True,
                 "data": {
+                    "batch_info": {
+                        "batch_number": batch_info.get('batch_number', 'N/A') if batch_info else 'N/A',
+                        "total_coupons": total_coupons,
+                        "points_each": batch_info.get('points_value', 0) if batch_info else 0,
+                        "used": used_coupons,
+                        "available": available_coupons,
+                        "usage_rate": f"{usage_rate}%",
+                        "valid_from": batch_info.get('valid_from', 'N/A') if batch_info else 'N/A',
+                        "valid_to": batch_info.get('valid_to', 'N/A') if batch_info else 'N/A',
+                        "days_left": days_left
+                    },
                     "coupons": coupons,
                     "pagination": {
                         "current_page": page,
@@ -269,6 +256,86 @@ class CouponService:
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
+    def get_coupon_code_list_csv(self, request_data: dict) -> dict:
+        """Get coupon codes as CSV for a specific batch"""
+        try:
+            # Extract mandatory coupon_master_id
+            coupon_master_id = request_data.get('coupon_master_id')
+            if not coupon_master_id:
+                return {
+                    "success": False,
+                    "message": "coupon_master_id is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "Missing coupon_master_id"}
+                }
+
+            # Extract filters
+            filters = request_data.get('filters', {})
+            status = filters.get('status', 'active')
+            is_redeemed = filters.get('is_redeemed', False)  # Default to unused coupons only
+
+            # Build query with mandatory coupon_master_id - only unused coupons by default
+            query = {
+                "coupon_master_id": coupon_master_id,
+                "is_redeemed": False,  # Only unused coupons
+                "status": "active"     # Only active coupons
+            }
+
+            # Get all coupon codes for the batch
+            coupons = list(self.coupon_code.find(query, {"coupon_code": 1, "_id": 0}).sort("created_at", -1))
+            
+            # Extract only coupon codes
+            coupon_codes = [coupon['coupon_code'] for coupon in coupons]
+            
+            # Get batch info for filename
+            batch_info = self.coupon_master.find_one({"_id": ObjectId(coupon_master_id)})
+            batch_number = batch_info.get('batch_number', 'unknown') if batch_info else 'unknown'
+            
+            # Generate filename
+            filename = f"coupon_codes_{batch_number}_{self.current_datetime.strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            # Create uploads directory if it doesn't exist
+            import os
+            upload_dir = "uploads/trust_rewards/coupons"
+            os.makedirs(upload_dir, exist_ok=True)
+            
+            # Full file path
+            file_path = os.path.join(upload_dir, filename)
+            
+            # Create CSV content and save to file
+            csv_content = "Coupon Code\n" + "\n".join(coupon_codes)
+            
+            # Write CSV file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(csv_content)
+            
+            # Convert file path to use forward slashes for response
+            response_file_path = file_path.replace('\\', '/')
+            
+            # Create full URL for file access
+            # base_url = "http://127.0.0.1:8000"  # You can make this configurable
+            base_url = "http://getpe.shop"
+            full_url = f"{base_url}/{response_file_path}"
+            
+            return {
+                "success": True,
+                "message": f"Successfully generated CSV with {len(coupon_codes)} coupon codes",
+                "data": {
+                    "filename": filename,
+                    "file_path": response_file_path,
+                    "full_url": full_url,
+                    "total_codes": len(coupon_codes),
+                    "batch_number": batch_number,
+                    "coupon_master_id": coupon_master_id
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to generate CSV: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
     def get_coupon_master_list(self, request_data: dict) -> dict:
         """Get list of coupon master batches"""
         try:
@@ -283,7 +350,11 @@ class CouponService:
 
             # Build query
             query = {}
-            if status != 'all':
+            if status == 'expired':
+                # Filter for expired batches (valid_to date is in the past)
+                current_date = self.current_datetime.strftime("%Y-%m-%d")
+                query['valid_to'] = {"$lt": current_date}
+            elif status != 'all':
                 query['status'] = status
 
             # Get total count
@@ -293,9 +364,14 @@ class CouponService:
             pipeline = [
                 {"$match": query},
                 {
+                    "$addFields": {
+                        "coupon_master_id_str": {"$toString": "$_id"}
+                    }
+                },
+                {
                     "$lookup": {
                         "from": "coupon_code",
-                        "localField": "_id",
+                        "localField": "coupon_master_id_str",
                         "foreignField": "coupon_master_id",
                         "as": "coupons"
                     }
@@ -310,12 +386,27 @@ class CouponService:
                                     "cond": {"$eq": ["$$this.is_redeemed", True]}
                                 }
                             }
+                        },
+                        "usage": {
+                            "$concat": [
+                                {"$toString": {
+                                    "$size": {
+                                        "$filter": {
+                                            "input": "$coupons",
+                                            "cond": {"$eq": ["$$this.is_redeemed", True]}
+                                        }
+                                    }
+                                }},
+                                "/",
+                                {"$toString": {"$size": "$coupons"}}
+                            ]
                         }
                     }
                 },
                 {
                     "$project": {
-                        "coupons": 0  # Remove the coupons array to reduce response size
+                        "coupons": 0,  # Remove the coupons array to reduce response size
+                        "coupon_master_id_str": 0  # Remove the temporary field
                     }
                 },
                 {"$sort": {"created_at": -1, "created_time": -1}},
@@ -334,10 +425,14 @@ class CouponService:
             has_next = page < total_pages
             has_prev = page > 1
 
+            # Get stats data
+            stats = self.get_coupon_stats()
+
             return {
                 "success": True,
                 "data": {
                     "masters": masters,
+                    "stats": stats,
                     "pagination": {
                         "current_page": page,
                         "total_pages": total_pages,
@@ -355,3 +450,84 @@ class CouponService:
                 "message": f"Failed to get coupon master list: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
+
+    def get_coupon_stats(self) -> dict:
+        """Get coupon statistics for dashboard"""
+        try:
+            # Total QR Coupons (Total coupon codes)
+            total_coupons = self.coupon_code.count_documents({})
+            
+            # Active Coupons (Not redeemed)
+            active_coupons = self.coupon_code.count_documents({"is_redeemed": False})
+            
+            # Used Coupons (Redeemed)
+            used_coupons = self.coupon_code.count_documents({"is_redeemed": True})
+            
+            # Expired Coupons (valid_to date is in the past)
+            current_date = self.current_datetime.strftime("%Y-%m-%d")
+            expired_coupons = self.coupon_code.count_documents({"valid_to": {"$lt": current_date}})
+            
+            # Total Points (Sum of all coupon values)
+            pipeline = [
+                {"$group": {"_id": None, "total_points": {"$sum": "$coupon_value"}}}
+            ]
+            points_result = list(self.coupon_code.aggregate(pipeline))
+            total_points = points_result[0]["total_points"] if points_result else 0
+            
+            return {
+                "total_qr_coupons": total_coupons,
+                "active_coupons": active_coupons,
+                "used_coupons": used_coupons,
+                "expired_coupons": expired_coupons,
+                "total_points": total_points
+            }
+            
+        except Exception as e:
+            return {
+                "total_qr_coupons": 0,
+                "active_coupons": 0,
+                "used_coupons": 0,
+                "expired_coupons": 0,
+                "total_points": 0
+            }
+
+    def _get_next_coupon_id(self) -> str:
+        """Get next auto-incrementing coupon_id like COU-1, COU-2, etc."""
+        try:
+            # Find the highest coupon_id
+            pipeline = [
+                {
+                    "$project": {
+                        "coupon_id": 1,
+                        "numeric_part": {
+                            "$toInt": {
+                                "$substr": [
+                                    "$coupon_id",
+                                    4,  # Skip "COU-"
+                                    -1
+                                ]
+                            }
+                        }
+                    }
+                },
+                {"$sort": {"numeric_part": -1}},
+                {"$limit": 1}
+            ]
+            
+            result = list(self.coupon_master.aggregate(pipeline))
+            
+            if result and result[0].get('coupon_id'):
+                # Extract numeric part and increment
+                last_coupon_id = result[0]['coupon_id']
+                numeric_part = int(last_coupon_id.split('-')[1])
+                next_number = numeric_part + 1
+            else:
+                # First coupon
+                next_number = 1
+            
+            return f"COU-{next_number}"
+            
+        except Exception as e:
+            # Fallback: use timestamp-based ID
+            timestamp = int(self.current_datetime.timestamp())
+            return f"COU-{timestamp}"
