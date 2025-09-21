@@ -1,4 +1,12 @@
 from fastapi import Request, HTTPException
+import jwt
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+JWT_SECRET = os.getenv('JWT_SECRET', 'your_jwt_secret')
+JWT_ALGORITHM = 'HS256'
 
 def verify_token(token:str):
         """Verify JWT token"""
