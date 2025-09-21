@@ -52,8 +52,8 @@ class CouponService:
 
             # Validate date format and logic
             try:
-                valid_from_date = datetime.strptime(valid_from, "%d-%m-%Y")
-                valid_to_date = datetime.strptime(valid_to, "%d-%m-%Y")
+                valid_from_date = datetime.strptime(valid_from, "%Y-%m-%d")
+                valid_to_date = datetime.strptime(valid_to, "%Y-%m-%d")
                 
                 # Check if valid_from is not in the past
                 if valid_from_date.date() < self.current_datetime.date():
@@ -73,7 +73,7 @@ class CouponService:
             except ValueError:
                 return {
                     "success": False,
-                    "message": "Invalid date format. Use dd-mm-yyyy",
+                    "message": "Invalid date format. Use yyyy-mm-dd",
                     "error": {"code": "VALIDATION_ERROR", "details": "Invalid date format"}
                 }
 
