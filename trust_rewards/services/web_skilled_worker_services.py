@@ -1,6 +1,6 @@
 from bson import ObjectId
 from trust_rewards.database import client1
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 import pandas as pd
 
@@ -70,6 +70,9 @@ class SkilledWorkerService:
             has_next = page < total_pages
             has_prev = page > 1
 
+            # Get stats card data
+            stats = self.get_stats_data()
+
             return {
                 "success": True,
                 "data": {
@@ -81,7 +84,8 @@ class SkilledWorkerService:
                         "limit": limit,
                         "has_next": has_next,
                         "has_prev": has_prev
-                    }
+                    },
+                    "stats": stats
                 }
             }
 
@@ -91,6 +95,89 @@ class SkilledWorkerService:
                 "message": f"Failed to get skilled workers list: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
+
+    def get_stats_data(self) -> dict:
+        """Get statistics data for dashboard cards"""
+        try:
+            # Get current month and last month for comparison
+            current_date = self.current_datetime
+            last_month = current_date.replace(day=1) - timedelta(days=1)
+            last_month_start = last_month.replace(day=1)
+            current_month_start = current_date.replace(day=1)
+            
+            # Total Workers (all time)
+            total_workers = self.skilled_workers.count_documents({})
+            
+            # Active Workers (current)
+            active_workers = self.skilled_workers.count_documents({"status": "Active"})
+            
+            # KYC Pending Workers
+            kyc_pending = self.skilled_workers.count_documents({"status": "KYC Pending"})
+            
+            # Total Redemptions (sum of redemption_count for all workers)
+            redemption_pipeline = [
+                {"$group": {"_id": None, "total_redemptions": {"$sum": "$redemption_count"}}}
+            ]
+            redemption_result = list(self.skilled_workers.aggregate(redemption_pipeline))
+            total_redemptions = redemption_result[0]["total_redemptions"] if redemption_result else 0
+            
+            # Calculate trends (comparing with last month)
+            # Workers created this month
+            current_month_workers = self.skilled_workers.count_documents({
+                "created_date": {"$gte": current_month_start.strftime("%Y-%m-%d")}
+            })
+            
+            # Workers created last month
+            last_month_workers = self.skilled_workers.count_documents({
+                "created_date": {
+                    "$gte": last_month_start.strftime("%Y-%m-%d"),
+                    "$lt": current_month_start.strftime("%Y-%m-%d")
+                }
+            })
+            
+            # Calculate percentage changes
+            total_workers_trend = self._calculate_percentage_change(total_workers - current_month_workers, total_workers)
+            active_workers_trend = self._calculate_percentage_change(active_workers, total_workers)
+            kyc_pending_trend = self._calculate_percentage_change(kyc_pending, total_workers)
+            total_redemptions_trend = self._calculate_percentage_change(total_redemptions, total_redemptions)
+            
+            return {
+                "total_workers": {
+                    "value": total_workers,
+                    "trend": f"+{total_workers_trend}% from last month",
+                    "trend_type": "positive" if total_workers_trend > 0 else "negative"
+                },
+                "active_workers": {
+                    "value": active_workers,
+                    "trend": f"+{active_workers_trend}% from last month",
+                    "trend_type": "positive" if active_workers_trend > 0 else "negative"
+                },
+                "kyc_pending": {
+                    "value": kyc_pending,
+                    "trend": "Requires attention" if kyc_pending > 0 else "All clear",
+                    "trend_type": "warning" if kyc_pending > 0 else "positive"
+                },
+                "total_redemptions": {
+                    "value": total_redemptions,
+                    "trend": f"+{total_redemptions_trend}% from last month",
+                    "trend_type": "positive" if total_redemptions_trend > 0 else "negative"
+                }
+            }
+            
+        except Exception as e:
+            # Return default stats if calculation fails
+            return {
+                "total_workers": {"value": 0, "trend": "N/A", "trend_type": "neutral"},
+                "active_workers": {"value": 0, "trend": "N/A", "trend_type": "neutral"},
+                "kyc_pending": {"value": 0, "trend": "N/A", "trend_type": "neutral"},
+                "total_redemptions": {"value": 0, "trend": "N/A", "trend_type": "neutral"}
+            }
+
+    def _calculate_percentage_change(self, old_value: int, new_value: int) -> int:
+        """Calculate percentage change between two values"""
+        if old_value == 0:
+            return 100 if new_value > 0 else 0
+        return round(((new_value - old_value) / old_value) * 100)
 
     def get_skilled_worker_details(self, request_data: dict) -> dict:
         """Get details of a specific skilled worker"""
