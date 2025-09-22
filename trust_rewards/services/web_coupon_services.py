@@ -8,6 +8,7 @@ class CouponService:
         self.client_database = client1['trust_rewards']
         self.coupon_master = self.client_database["coupon_master"]
         self.coupon_code = self.client_database["coupon_code"]
+        self.skilled_workers = self.client_database["skilled_workers"]
         self.current_datetime = datetime.now()
 
     def generate_points_coupons(self, request_data: dict) -> dict:
@@ -596,3 +597,44 @@ class CouponService:
             # Fallback: use timestamp-based ID
             timestamp = int(self.current_datetime.timestamp())
             return f"COU-{timestamp}"
+
+    def get_analytics_overview(self) -> dict:
+        """Get analytics overview for common header stats."""
+        try:
+            # Total coupons
+            total_coupons = self.coupon_code.count_documents({})
+
+            # Active coupons (not scanned)
+            active_coupons = self.coupon_code.count_documents({"is_scanned": False})
+
+            # Used coupons (scanned)
+            used_coupons = self.coupon_code.count_documents({"is_scanned": True})
+
+            # Total points from used coupons (sum of coupon_value where is_scanned = True)
+            points_pipeline = [
+                {"$match": {"is_scanned": True}},
+                {"$group": {"_id": None, "total_points": {"$sum": "$coupon_value"}}}
+            ]
+            points_result = list(self.coupon_code.aggregate(points_pipeline))
+            total_points = points_result[0]["total_points"] if points_result else 0
+
+            # Total workers (only Active) from skilled_workers collection
+            total_workers = self.skilled_workers.count_documents({"status": "Active"})
+
+            return {
+                "success": True,
+                "message": "Analytics overview retrieved successfully",
+                "data": {
+                    "total_coupons": total_coupons,
+                    "active_coupons": active_coupons,
+                    "used_coupons": used_coupons,
+                    "total_points": total_points,
+                    "total_workers": total_workers
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get analytics overview: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
