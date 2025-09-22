@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta
 from trust_rewards.database import client1
 from dotenv import load_dotenv
-import jwt
+import jwt as pyjwt
 from passlib.hash import bcrypt
 
 load_dotenv()
@@ -38,7 +38,7 @@ class UserAuthService(BaseAuthService):
             'role': user.get('role', 'Admin'),
             'exp': datetime.utcnow() + timedelta(minutes=JWT_EXP_DELTA_MINUTES)
         }
-        token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        token = pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
         return token
 
     def login(self, email, password):

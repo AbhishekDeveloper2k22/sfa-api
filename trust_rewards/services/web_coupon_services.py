@@ -116,9 +116,9 @@ class CouponService:
                     "valid_from": valid_from_date.strftime("%Y-%m-%d"),
                     "valid_to": valid_to_date.strftime("%Y-%m-%d"),
                     "status": "active",
-                    "is_redeemed": False,
-                    "redeemed_by": None,
-                    "redeemed_at": None,
+                    "is_scanned": False,
+                    "scanned_by": None,
+                    "scanned_at": None,
                     "created_at": self.current_datetime.strftime("%Y-%m-%d"),
                     "created_time": self.current_datetime.strftime("%H:%M:%S"),
                     "created_by_id": created_by_id
@@ -183,14 +183,62 @@ class CouponService:
             # Extract filters
             filters = request_data.get('filters', {})
             status = filters.get('status', 'all')
-            is_redeemed = filters.get('is_redeemed')
+            is_scanned = filters.get('is_scanned')
+            scanned_by_name = filters.get('scanned_by_name')  # Optional filter by worker name
 
             # Build match conditions with mandatory coupon_master_id
             match_conditions = {"coupon_master_id": coupon_master_id}
             if status != 'all':
                 match_conditions["status"] = status
-            if is_redeemed is not None:
-                match_conditions["is_redeemed"] = is_redeemed
+            if is_scanned is not None:
+                match_conditions["is_scanned"] = is_scanned
+
+            # If filter by scanned_by_name is provided, resolve matching worker IDs and filter by scanned_by
+            if scanned_by_name:
+                try:
+                    # Find skilled workers whose name matches (case-insensitive)
+                    matching_workers = list(
+                        self.client_database["skilled_workers"].find(
+                            {"name": {"$regex": scanned_by_name, "$options": "i"}},
+                            {"_id": 1}
+                        )
+                    )
+                    matching_worker_ids = [str(w["_id"]) for w in matching_workers]
+                    # If no matches, ensure result is empty by adding impossible condition
+                    if not matching_worker_ids:
+                        return {
+                            "success": True,
+                            "data": {
+                                "batch_info": None,
+                                "coupons": [],
+                                "pagination": {
+                                    "current_page": page,
+                                    "total_pages": 0,
+                                    "total_count": 0,
+                                    "limit": limit,
+                                    "has_next": False,
+                                    "has_prev": False
+                                }
+                            }
+                        }
+                    match_conditions["scanned_by"] = {"$in": matching_worker_ids}
+                except Exception:
+                    # If lookup fails, fall back to no results
+                    return {
+                        "success": True,
+                        "data": {
+                            "batch_info": None,
+                            "coupons": [],
+                            "pagination": {
+                                "current_page": page,
+                                "total_pages": 0,
+                                "total_count": 0,
+                                "limit": limit,
+                                "has_next": False,
+                                "has_prev": False
+                            }
+                        }
+                    }
 
             # Get total count
             total_count = self.coupon_code.count_documents(match_conditions)
@@ -202,12 +250,29 @@ class CouponService:
             for coupon in coupons:
                 coupon['_id'] = str(coupon['_id'])
 
+            # Enrich coupons with scanned_by_name by joining to skilled_workers using scanned_by (stored as string id)
+            scanned_ids = list({c.get("scanned_by") for c in coupons if c.get("scanned_by")})
+            if scanned_ids:
+                # Validate and convert to ObjectId list
+                valid_obj_ids = [ObjectId(sid) for sid in scanned_ids if ObjectId.is_valid(sid)]
+                if valid_obj_ids:
+                    workers = list(self.client_database["skilled_workers"].find({"_id": {"$in": valid_obj_ids}}, {"name": 1}))
+                    id_to_name = {str(w["_id"]): w.get("name", "") for w in workers}
+                else:
+                    id_to_name = {}
+                for c in coupons:
+                    sid = c.get("scanned_by")
+                    c["scanned_by_name"] = id_to_name.get(sid) if sid else None
+            else:
+                for c in coupons:
+                    c["scanned_by_name"] = None
+
             # Get batch information for the coupon_master_id
             batch_info = self.coupon_master.find_one({"_id": ObjectId(coupon_master_id)})
             
             # Calculate usage statistics
             total_coupons = self.coupon_code.count_documents({"coupon_master_id": coupon_master_id})
-            used_coupons = self.coupon_code.count_documents({"coupon_master_id": coupon_master_id, "is_redeemed": True})
+            used_coupons = self.coupon_code.count_documents({"coupon_master_id": coupon_master_id, "is_scanned": True})
             available_coupons = total_coupons - used_coupons
             usage_rate = round((used_coupons / total_coupons * 100), 1) if total_coupons > 0 else 0
             
@@ -271,12 +336,12 @@ class CouponService:
             # Extract filters
             filters = request_data.get('filters', {})
             status = filters.get('status', 'active')
-            is_redeemed = filters.get('is_redeemed', False)  # Default to unused coupons only
+            is_scanned = filters.get('is_scanned', False)  # Default to unused coupons only
 
             # Build query with mandatory coupon_master_id - only unused coupons by default
             query = {
                 "coupon_master_id": coupon_master_id,
-                "is_redeemed": False,  # Only unused coupons
+                "is_scanned": False,  # Only unused coupons
                 "status": "active"     # Only active coupons
             }
 
@@ -379,11 +444,11 @@ class CouponService:
                 {
                     "$addFields": {
                         "total_coupons": {"$size": "$coupons"},
-                        "redeemed_coupons": {
+                        "scanned_coupons": {
                             "$size": {
                                 "$filter": {
                                     "input": "$coupons",
-                                    "cond": {"$eq": ["$$this.is_redeemed", True]}
+                                    "cond": {"$eq": ["$$this.is_scanned", True]}
                                 }
                             }
                         },
@@ -393,7 +458,7 @@ class CouponService:
                                     "$size": {
                                         "$filter": {
                                             "input": "$coupons",
-                                            "cond": {"$eq": ["$$this.is_redeemed", True]}
+                                            "cond": {"$eq": ["$$this.is_scanned", True]}
                                         }
                                     }
                                 }},
@@ -457,11 +522,11 @@ class CouponService:
             # Total QR Coupons (Total coupon codes)
             total_coupons = self.coupon_code.count_documents({})
             
-            # Active Coupons (Not redeemed)
-            active_coupons = self.coupon_code.count_documents({"is_redeemed": False})
+            # Active Coupons (Not scanned)
+            active_coupons = self.coupon_code.count_documents({"is_scanned": False})
             
-            # Used Coupons (Redeemed)
-            used_coupons = self.coupon_code.count_documents({"is_redeemed": True})
+            # Used Coupons (Scanned)
+            used_coupons = self.coupon_code.count_documents({"is_scanned": True})
             
             # Expired Coupons (valid_to date is in the past)
             current_date = self.current_datetime.strftime("%Y-%m-%d")

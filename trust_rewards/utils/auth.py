@@ -1,5 +1,5 @@
 from fastapi import Request, HTTPException
-import jwt
+import jwt as pyjwt
 import os
 from dotenv import load_dotenv
 
@@ -8,14 +8,14 @@ load_dotenv()
 JWT_SECRET = os.getenv('JWT_SECRET', 'your_jwt_secret')
 JWT_ALGORITHM = 'HS256'
 
-def verify_token(token:str):
+def verify_token(token: str):
         """Verify JWT token"""
         try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
             return payload
-        except jwt.ExpiredSignatureError:
+        except pyjwt.ExpiredSignatureError:
             return None
-        except jwt.JWTError:
+        except pyjwt.InvalidTokenError:
             return None
 
 
