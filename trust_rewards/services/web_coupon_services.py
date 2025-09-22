@@ -638,3 +638,147 @@ class CouponService:
                 "message": f"Failed to get analytics overview: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
+
+    def get_statewise_analytics(self, metric: str = "used_coupons") -> dict:
+        """Get statewise analytics for selected metric: used_coupons | total_points | workers."""
+        try:
+            # Aggregate used coupons and total points by state using coupon_code joined to skilled_workers
+            coupon_pipeline = [
+                {"$match": {"is_scanned": True, "scanned_by": {"$ne": None}}},
+                {"$addFields": {"scanned_by_obj": {"$toObjectId": "$scanned_by"}}},
+                {
+                    "$lookup": {
+                        "from": "skilled_workers",
+                        "localField": "scanned_by_obj",
+                        "foreignField": "_id",
+                        "as": "worker"
+                    }
+                },
+                {"$unwind": "$worker"},
+                {
+                    "$group": {
+                        "_id": "$worker.state",
+                        "used_coupons": {"$sum": 1},
+                        "total_points": {"$sum": "$coupon_value"}
+                    }
+                }
+            ]
+            coupon_stats = list(self.coupon_code.aggregate(coupon_pipeline))
+
+            # Aggregate active workers by state
+            workers_pipeline = [
+                {"$match": {"status": "Active"}},
+                {"$group": {"_id": "$state", "workers": {"$sum": 1}}}
+            ]
+            worker_stats = list(self.skilled_workers.aggregate(workers_pipeline))
+
+            # Build maps for quick merge
+            coupons_by_state = { (doc.get("_id") or "Unknown"): {
+                "used_coupons": doc.get("used_coupons", 0),
+                "total_points": doc.get("total_points", 0)
+            } for doc in coupon_stats }
+
+            workers_by_state = { (doc.get("_id") or "Unknown"): doc.get("workers", 0) for doc in worker_stats }
+
+            # Union of states from both datasets
+            all_states = set(coupons_by_state.keys()) | set(workers_by_state.keys())
+
+            states_output = []
+            totals_used = 0
+            totals_points = 0
+            totals_workers = 0
+
+            for state in sorted(all_states, key=lambda s: (s is None, s)):
+                state_key = state if state not in (None, "",) else "Unknown"
+                used = coupons_by_state.get(state_key, {}).get("used_coupons", 0)
+                points = coupons_by_state.get(state_key, {}).get("total_points", 0)
+                workers = workers_by_state.get(state_key, 0)
+
+                totals_used += used
+                totals_points += points
+                totals_workers += workers
+
+                states_output.append({
+                    "state": state_key or "Unknown",
+                    "used_coupons": used,
+                    "total_points": points,
+                    "workers": workers
+                })
+
+            # Prepare response based on selected metric
+            metric_map = {
+                "used_coupons": ("used_coupons", totals_used),
+                "total_points": ("total_points", totals_points),
+                "workers": ("workers", totals_workers)
+            }
+            if metric not in metric_map:
+                metric = "used_coupons"
+
+            key_name, total_value = metric_map[metric]
+            states_metric_only = [{"state": s["state"], "value": s[key_name]} for s in states_output]
+
+            return {
+                "success": True,
+                "message": "Statewise analytics retrieved successfully",
+                "data": {
+                    "metric": metric,
+                    "states": states_metric_only
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get statewise analytics: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_statewise_totals(self, metric: str = "used_coupons") -> dict:
+        """Get overall totals.
+        If metric == 'all', returns all three: used_coupons, total_points, workers.
+        Otherwise returns a single metric total.
+        """
+        try:
+            # Compute all totals
+            used_total = self.coupon_code.count_documents({"is_scanned": True})
+
+            points_pipeline = [
+                {"$match": {"is_scanned": True}},
+                {"$group": {"_id": None, "total_points": {"$sum": "$coupon_value"}}}
+            ]
+            points_result = list(self.coupon_code.aggregate(points_pipeline))
+            points_total = points_result[0]["total_points"] if points_result else 0
+
+            workers_total = self.skilled_workers.count_documents({"status": "Active"})
+
+            metric_map = {
+                "used_coupons": used_total,
+                "total_points": points_total,
+                "workers": workers_total
+            }
+            if metric == "all":
+                return {
+                    "success": True,
+                    "message": "Totals retrieved successfully",
+                    "data": {
+                        "used_coupons": used_total,
+                        "total_points": points_total,
+                        "workers": workers_total
+                    }
+                }
+            if metric not in metric_map:
+                metric = "used_coupons"
+
+            return {
+                "success": True,
+                "message": "Totals retrieved successfully",
+                "data": {
+                    "metric": metric,
+                    "total": metric_map[metric]
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get totals: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }

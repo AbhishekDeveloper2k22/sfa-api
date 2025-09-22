@@ -186,7 +186,87 @@ async def get_coupon_master_list(request: Request, current_user: dict = Depends(
             statuscode=200,
             data=result.get("data", {})
         )
-        
+    except Exception as e:
+        tb = traceback.format_exc()
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": str(e),
+                    "traceback": tb
+                }
+            }
+        )
+@router.post("/analytics_statewise")
+async def analytics_statewise(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get statewise analytics for selected metric (used_coupons | total_points | workers)"""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+        metric = body.get("metric", "used_coupons")
+        service = CouponService()
+        result = service.get_statewise_analytics(metric=metric)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get statewise analytics"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Statewise analytics retrieved successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        tb = traceback.format_exc()
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": str(e),
+                    "traceback": tb
+                }
+            }
+        )
+    
+@router.post("/analytics_statewise_totals")
+async def analytics_statewise_totals(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get only overall totals for selected metric (used_coupons | total_points | workers)"""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+        metric = body.get("metric", "all")
+        service = CouponService()
+        result = service.get_statewise_totals(metric=metric)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get totals"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Totals retrieved successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
     except Exception as e:
         tb = traceback.format_exc()
         return format_response(
