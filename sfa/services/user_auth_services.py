@@ -15,7 +15,7 @@ JWT_EXP_DELTA_MINUTES = 10080  # 7 days
 class BaseAuthService:
     def __init__(self):
         # Use trust_rewards users collection for web login as requested
-        self.client_database = client1['trust_rewards']
+        self.client_database = client1['field_squad']
         self.user_collection = self.client_database['users']
         self.tenants_collection = self.client_database['tenants']
         self.module_master_collection = self.client_database['module_master']
