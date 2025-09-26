@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 from trust_rewards.database import client1
+from trust_rewards.utils.datetime_utils import important_utilities
 
 
 class WebMasterService:
@@ -360,8 +361,34 @@ class WebMasterService:
             )
             
             # Convert ObjectId to string and add created_by_name / updated_by_name
+            datetime_utils = important_utilities()
+            
             for record in records:
                 record['_id'] = str(record['_id'])
+                
+                # Combine created_at and created_time into created_datetime
+                created_at = record.get('created_at', '')
+                created_time = record.get('created_time', '')
+                if created_at and created_time:
+                    try:
+                        created_datetime = datetime.strptime(f"{created_at} {created_time}", "%Y-%m-%d %H:%M:%S")
+                        record['created_datetime'] = created_datetime.strftime("%d-%m-%Y %I:%M %p")
+                    except:
+                        record['created_datetime'] = f"{created_at} {created_time}"
+                else:
+                    record['created_datetime'] = None
+                
+                # Combine updated_at and updated_time into updated_datetime if available
+                updated_at = record.get('updated_at')
+                updated_time = record.get('updated_time')
+                if updated_at and updated_time:
+                    try:
+                        updated_datetime = datetime.strptime(f"{updated_at} {updated_time}", "%Y-%m-%d %H:%M:%S")
+                        record['updated_datetime'] = updated_datetime.strftime("%d-%m-%Y %I:%M %p")
+                    except:
+                        record['updated_datetime'] = f"{updated_at} {updated_time}"
+                else:
+                    record['updated_datetime'] = None
                 
                 # Get created_by_name from users collection
                 created_by_id = record.get('created_by')
