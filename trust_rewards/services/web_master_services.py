@@ -165,8 +165,8 @@ class WebMasterService:
             value = payload.get("value")
             description = (payload.get("description") or "").strip()
             status = (payload.get("status") or "").strip().lower()
-            valid_from = payload.get("validFrom")
-            valid_to = payload.get("validTo")
+            valid_from = payload.get("valid_from")
+            valid_to = payload.get("valid_to")
 
             # Validate name
             if not (2 <= len(name) <= 50):
