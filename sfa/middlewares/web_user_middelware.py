@@ -52,3 +52,15 @@ class DataProcessor:
         return result
     
  
+    
+    def users_data(self, request_data):
+        processor = users_tool()
+        if request_data['type'] == "Office":
+            query = {"user_type":4}
+        if request_data['type'] == "Market":
+            query = {"user_type":5}
+        if request_data['type'] == "":
+            query = {}
+        result = processor.users_data(query)
+        return result
+    
