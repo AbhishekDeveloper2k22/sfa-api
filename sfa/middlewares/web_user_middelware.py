@@ -19,40 +19,6 @@ class DataProcessor:
         result = processor.users_types(query)
         return result
         
-    def users_add(self, request_data):
-        processor = users_tool()
-        if request_data.get('_id') and request_data['_id'] != "":
-            result = processor.update_users(request_data)
-        else:
-            result = processor.add_users(request_data)
-        return result
-    
-    def check_user_exists(self, request_data):
-        """
-        Check if user already exists based on email, phone, or other unique fields
-        """
-        processor = users_tool()
-        result = processor.check_user_exists(request_data)
-        return result
-    
-    def users_list(self, request_data):
-        """
-        Get paginated list of users with count
-        """
-        processor = users_tool()
-        result = processor.users_list(request_data)
-        return result
-    
-    def user_details(self, request_data):
-        """
-        Get specific user details by ID
-        """
-        processor = users_tool()
-        result = processor.user_details(request_data)
-        return result
-    
- 
-    
     def users_data(self, request_data):
         processor = users_tool()
         if request_data['type'] == "Office":
@@ -63,4 +29,3 @@ class DataProcessor:
             query = {}
         result = processor.users_data(query)
         return result
-    
