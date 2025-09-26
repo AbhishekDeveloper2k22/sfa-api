@@ -219,3 +219,24 @@ class SecurityUtils:
             
         masked_local = local[0] + "*" * (len(local) - 2) + local[-1]
         return f"{masked_local}@{domain}"
+
+
+class AuditUtils:
+    """Utilities for created/updated audit fields"""
+    @staticmethod
+    def build_create_meta(user_id: int) -> Dict[str, Any]:
+        now = datetime.now()
+        return {
+            "created_at": now.strftime("%Y-%m-%d"),
+            "created_time": now.strftime("%H:%M:%S"),
+            "created_by": user_id,
+        }
+
+    @staticmethod
+    def build_update_meta(user_id: int) -> Dict[str, Any]:
+        now = datetime.now()
+        return {
+            "updated_at": now.strftime("%Y-%m-%d"),
+            "updated_time": now.strftime("%H:%M:%S"),
+            "updated_by": user_id,
+        }
