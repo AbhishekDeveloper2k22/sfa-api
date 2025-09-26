@@ -79,3 +79,39 @@ async def get_points_master_list(request: Request, current_user: dict = Depends(
         )
 
 
+@router.post("/points_master_edit")
+async def update_points_master(request: Request, current_user: dict = Depends(get_current_user)):
+    """Update an existing points master record with validations."""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+
+        service = WebMasterService()
+        updated_by = current_user.get("user_id", 1)  # Get user_id from JWT payload
+        result = service.update_points_master(body, created_by=updated_by)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Validation failed"),
+                statuscode=400,
+                data={"error": result.get("error")}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Points master updated successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Failed to update points master: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )
+
+
