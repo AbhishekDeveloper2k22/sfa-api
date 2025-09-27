@@ -436,6 +436,50 @@ async def update_product_master(request: Request, current_user: dict = Depends(g
         )
 
 
+@router.post("/product_master_detail")
+async def get_product_master_detail(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get detailed information of a single product master record."""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+
+        product_id = body.get("product_id")
+        if not product_id:
+            return format_response(
+                success=False,
+                msg="Product ID is required",
+                statuscode=400,
+                data={"error": {"code": "VALIDATION_ERROR", "details": "missing_product_id"}}
+            )
+
+        service = WebMasterService()
+        result = service.get_product_master_detail(product_id)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get product detail"),
+                statuscode=400,
+                data={"error": result.get("error")}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Product master detail retrieved successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Failed to get product master detail: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )
+
+
 @router.post("/product_image_upload")
 async def upload_product_image(
     product_id: str = Form(...),
