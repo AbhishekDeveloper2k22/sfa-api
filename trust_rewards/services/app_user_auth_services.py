@@ -405,5 +405,3 @@ class AppUserAuthService:
                 return worker
                 
         return None
-
-
