@@ -1558,6 +1558,7 @@ class WebMasterService:
             sku = (payload.get("sku") or "").strip()
             mrp = payload.get("mrp")
             status = (payload.get("status") or "active").strip().lower()
+            images = payload.get("images", [])  # Handle images array
 
             # Validate product_name
             if not (2 <= len(product_name) <= 100):
@@ -1648,6 +1649,14 @@ class WebMasterService:
                     "error": {"code": "VALIDATION_ERROR", "details": "invalid_status"},
                 }
 
+            # Validate images array if provided
+            if images and not isinstance(images, list):
+                return {
+                    "success": False,
+                    "message": "Images must be an array",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_images_format"},
+                }
+
             # Use AuditUtils for consistent audit fields
             update_meta = AuditUtils.build_update_meta(updated_by)
             
@@ -1665,6 +1674,10 @@ class WebMasterService:
                 "status": status,
                 **update_meta  # Spread updated_at, updated_time, updated_by
             }
+
+            # Add images array if provided
+            if images:
+                update_doc["images"] = images
 
             result = self.product_master.update_one(
                 {"_id": ObjectId(record_id)},
@@ -1707,6 +1720,7 @@ class WebMasterService:
                     "sku": sku,
                     "mrp": mrp,
                     "status": status,
+                    "images": updated_record.get("images", []),
                     "created_at": updated_record.get("created_at"),
                     "created_time": updated_record.get("created_time"),
                     "created_by": updated_record.get("created_by"),
@@ -1722,6 +1736,101 @@ class WebMasterService:
                 "success": False,
                 "message": f"Failed to update product master: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)},
+            }
+
+    def get_product_master_detail(self, product_id: str) -> Dict[str, Any]:
+        """Get detailed information of a single product master record."""
+        try:
+            # Validate product_id
+            if not product_id:
+                return {
+                    "success": False,
+                    "message": "Product ID is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "missing_product_id"},
+                }
+
+            # Check if product exists
+            product = self.product_master.find_one({"_id": ObjectId(product_id)})
+            if not product:
+                return {
+                    "success": False,
+                    "message": "Product not found",
+                    "error": {"code": "VALIDATION_ERROR", "details": "product_not_found"},
+                }
+
+            # Convert ObjectId to string
+            product['_id'] = str(product['_id'])
+
+            # Combine created_at and created_time into created_datetime
+            created_at = product.get('created_at', '')
+            created_time = product.get('created_time', '')
+            if created_at and created_time:
+                try:
+                    created_datetime = datetime.strptime(f"{created_at} {created_time}", "%Y-%m-%d %H:%M:%S")
+                    product['created_datetime'] = created_datetime.strftime("%d-%m-%Y %I:%M %p")
+                except:
+                    product['created_datetime'] = f"{created_at} {created_time}"
+            else:
+                product['created_datetime'] = None
+
+            # Combine updated_at and updated_time into updated_datetime if available
+            updated_at = product.get('updated_at')
+            updated_time = product.get('updated_time')
+            if updated_at and updated_time:
+                try:
+                    updated_datetime = datetime.strptime(f"{updated_at} {updated_time}", "%Y-%m-%d %H:%M:%S")
+                    product['updated_datetime'] = updated_datetime.strftime("%d-%m-%Y %I:%M %p")
+                except:
+                    product['updated_datetime'] = f"{updated_at} {updated_time}"
+            else:
+                product['updated_datetime'] = None
+
+            # Get created_by_name from users collection
+            created_by_id = product.get('created_by')
+            if created_by_id:
+                user = self.users.find_one({"user_id": created_by_id})
+                if user:
+                    product['created_by_name'] = user.get('username', 'Unknown')
+                else:
+                    product['created_by_name'] = 'Unknown'
+            else:
+                product['created_by_name'] = 'Unknown'
+
+            # Get updated_by_name from users collection if available
+            updated_by_id = product.get('updated_by')
+            if updated_by_id:
+                upd_user = self.users.find_one({"user_id": updated_by_id})
+                if upd_user:
+                    product['updated_by_name'] = upd_user.get('username', 'Unknown')
+                else:
+                    product['updated_by_name'] = 'Unknown'
+            else:
+                product['updated_by_name'] = None
+
+            # Remove internal fields
+            product.pop('product_name_lower', None)
+
+            # Simplify images array to only include image_id and file_url
+            if 'images' in product and product['images']:
+                simplified_images = []
+                for image in product['images']:
+                    simplified_images.append({
+                        'image_id': image.get('image_id'),
+                        'file_url': image.get('file_url')
+                    })
+                product['images'] = simplified_images
+
+            return {
+                "success": True,
+                "message": "Product master detail retrieved successfully",
+                "data": product
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get product master detail: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
     def get_product_master_stats(self) -> Dict[str, Any]:
