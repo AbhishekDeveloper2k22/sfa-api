@@ -244,8 +244,8 @@ class CouponService:
             # Get total count
             total_count = self.coupon_code.count_documents(match_conditions)
             
-            # Get coupons with pagination
-            coupons = list(self.coupon_code.find(match_conditions).skip(skip).limit(limit).sort("created_at", -1))
+            # Get coupons with pagination (sort first, then paginate)
+            coupons = list(self.coupon_code.find(match_conditions).sort("_id", -1).skip(skip).limit(limit))
             
             # Convert ObjectId to string
             for coupon in coupons:
@@ -346,8 +346,8 @@ class CouponService:
                 "status": "active"     # Only active coupons
             }
 
-            # Get all coupon codes for the batch
-            coupons = list(self.coupon_code.find(query, {"coupon_code": 1, "_id": 0}).sort("created_at", -1))
+            # Get all coupon codes for the batch (sort first)
+            coupons = list(self.coupon_code.find(query, {"coupon_code": 1, "_id": 0}).sort("_id", -1))
             
             # Extract only coupon codes
             coupon_codes = [coupon['coupon_code'] for coupon in coupons]
@@ -475,7 +475,7 @@ class CouponService:
                         "coupon_master_id_str": 0  # Remove the temporary field
                     }
                 },
-                {"$sort": {"created_at": -1, "created_time": -1}},
+                {"$sort": {"_id": -1}},
                 {"$skip": skip},
                 {"$limit": limit}
             ]

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 from trust_rewards.database import client1
 # from trust_rewards.utils.hashing import hash_password, verify_password
-from trust_rewards.utils.common import ValidationUtils, SecurityUtils, DateUtils
+from trust_rewards.utils.common import ValidationUtils, SecurityUtils, DateUtils, AuditUtils
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,7 +14,7 @@ class AppUserAuthService:
     def __init__(self):
         self.client_database = client1['trust_rewards']
         self.skilled_workers = self.client_database["skilled_workers"]
-        self.otp_verifications = self.client_database["otp_verifications"]
+        self.otp_verification = self.client_database["otp_verification"]
         self.jwt_secret = os.getenv("JWT_SECRET", "your-secret-key")
         self.jwt_algorithm = "HS256"
         self.otp_expiry_minutes = 5  # OTP expires in 5 minutes
@@ -51,7 +51,7 @@ class AppUserAuthService:
 
             # Check if worker is active
             if worker.get('status') != 'Active':
-                return {
+        return {
                     "success": False,
                     "message": "Account is inactive. Please contact support.",
                     "error": {"code": "ACCOUNT_INACTIVE", "details": "Worker account is not active"}
@@ -60,39 +60,46 @@ class AppUserAuthService:
             # Generate 6-digit OTP
             otp = SecurityUtils.generate_otp(6)
             
-            # Calculate expiry time
-            expiry_time = DateUtils.add_minutes_to_datetime(DateUtils.get_current_datetime(), self.otp_expiry_minutes)
+            # OTP expires in 5 minutes
+            expiry_time = datetime.now().timestamp() + (5 * 60)  # 5 minutes from now
             
             # Store OTP in database
             otp_data = {
+                "otp_id": f"OTP_{ObjectId()}",
+                "worker_id": str(worker['_id']),
                 "mobile": normalized_mobile,
                 "otp": otp,
-                "worker_id": worker['_id'],
-                "expiry_time": expiry_time,
-                "attempts": 0,
-                "is_verified": False,
-                "created_at": DateUtils.get_current_datetime(),
-                "created_time": DateUtils.get_current_time()
+                "purpose": "login",
+                "expires_at": expiry_time,
+                "is_used": False,
+                "created_at": DateUtils.get_current_date(),
+                "created_time": DateUtils.get_current_time(),
+                "created_datetime": DateUtils.get_current_datetime(),
+                **AuditUtils.build_create_meta(str(worker['_id']))
             }
             
-            # Remove any existing OTP for this mobile
-            self.otp_verifications.delete_many({"mobile": normalized_mobile})
+            # Remove any existing unused OTPs for this worker and purpose
+            self.otp_verification.delete_many({
+                "worker_id": str(worker['_id']),
+                "purpose": "login",
+                "is_used": False
+            })
             
             # Insert new OTP
-            result = self.otp_verifications.insert_one(otp_data)
+            result = self.otp_verification.insert_one(otp_data)
             
             # In production, send OTP via SMS service
             # For now, we'll return it in response (remove in production)
-            return {
-                "success": True,
-                "message": f"OTP sent successfully to {normalized_mobile}",
+                return {
+                    "success": True,
+                "message": f"OTP sent to mobile number ending with {normalized_mobile[-4:]}",
                 "data": {
-                    "mobile": normalized_mobile,
-                    "otp": otp,  # Remove this in production
-                    "expiry_minutes": self.otp_expiry_minutes,
-                    "otp_id": str(result.inserted_id)
+                    "otp_id": otp_data['otp_id'],
+                    "mobile_masked": f"******{normalized_mobile[-4:]}",
+                    "expires_in_minutes": 5,
+                    "otp": otp  # Remove this in production
                 }
-            }
+                }
                 
         except Exception as e:
             return {
@@ -106,6 +113,7 @@ class AppUserAuthService:
         try:
             mobile = request_data.get('mobile')
             otp = request_data.get('otp')
+            otp_id = request_data.get('otp_id')
             
             if not mobile or not otp:
                 return {
@@ -123,11 +131,21 @@ class AppUserAuthService:
                     "error": {"code": "VALIDATION_ERROR", "details": "Mobile number must be 10 digits or 12 digits with country code"}
                 }
 
-            # Find OTP record
-            otp_record = self.otp_verifications.find_one({
-                "mobile": normalized_mobile,
-                "is_verified": False
-            })
+            # Find OTP record - use otp_id if provided, otherwise fallback to mobile
+            if otp_id:
+                otp_record = self.otp_verification.find_one({
+                    "otp_id": otp_id,
+                    "mobile": normalized_mobile,
+                    "purpose": "login",
+                    "is_used": False
+                })
+            else:
+                # Fallback to mobile-based lookup for backward compatibility
+                otp_record = self.otp_verification.find_one({
+                    "mobile": normalized_mobile,
+                    "purpose": "login",
+                    "is_used": False
+                })
             
             if not otp_record:
                 return {
@@ -136,31 +154,17 @@ class AppUserAuthService:
                     "error": {"code": "OTP_NOT_FOUND", "details": "No valid OTP found for this mobile"}
                 }
 
-            # Check if OTP is expired
-            if DateUtils.is_datetime_expired(otp_record['expiry_time']):
-                self.otp_verifications.delete_one({"_id": otp_record['_id']})
+            # Check if OTP has expired
+            current_time = datetime.now().timestamp()
+            if current_time > otp_record.get('expires_at', 0):
                 return {
                     "success": False,
                     "message": "OTP has expired. Please request a new one.",
                     "error": {"code": "OTP_EXPIRED", "details": "OTP has expired"}
                 }
 
-            # Check attempts limit
-            if otp_record['attempts'] >= self.max_otp_attempts:
-                self.otp_verifications.delete_one({"_id": otp_record['_id']})
-                return {
-                    "success": False,
-                    "message": "Maximum OTP attempts exceeded. Please request a new OTP.",
-                    "error": {"code": "MAX_ATTEMPTS_EXCEEDED", "details": "Too many failed attempts"}
-                }
-
             # Verify OTP
-            if otp_record['otp'] != otp:
-                # Increment attempts
-                self.otp_verifications.update_one(
-                    {"_id": otp_record['_id']},
-                    {"$inc": {"attempts": 1}}
-                )
+            if otp_record.get('otp') != otp:
                 return {
                     "success": False,
                     "message": "Invalid OTP",
@@ -168,7 +172,7 @@ class AppUserAuthService:
                 }
             
             # OTP is correct - get worker details
-            worker = self.skilled_workers.find_one({"_id": otp_record['worker_id']})
+            worker = self.skilled_workers.find_one({"_id": ObjectId(otp_record['worker_id'])})
             if not worker:
                 return {
                     "success": False,
@@ -176,10 +180,16 @@ class AppUserAuthService:
                     "error": {"code": "USER_NOT_FOUND", "details": "Worker associated with OTP not found"}
                 }
 
-            # Mark OTP as verified
-            self.otp_verifications.update_one(
-                {"_id": otp_record['_id']},
-                {"$set": {"is_verified": True, "verified_at": DateUtils.get_current_datetime()}}
+            # Mark OTP as used
+            self.otp_verification.update_one(
+                {"otp_id": otp_record['otp_id']},
+                {
+                    "$set": {
+                        "is_used": True,
+                        "used_at": DateUtils.get_current_datetime(),
+                        **AuditUtils.build_update_meta(otp_record['worker_id'])
+                    }
+                }
             )
 
             # Generate JWT token
@@ -198,8 +208,8 @@ class AppUserAuthService:
                 {"$set": {"last_activity": DateUtils.get_current_date()}}
             )
 
-            return {
-                "success": True,
+                return {
+                    "success": True,
                 "message": "OTP verified successfully",
                 "data": {
                     "token": token,
@@ -217,7 +227,7 @@ class AppUserAuthService:
                     },
                     "expires_in": 24 * 60 * 60  # 24 hours in seconds
                 }
-            }
+                }
                 
         except Exception as e:
             return {
@@ -256,9 +266,10 @@ class AppUserAuthService:
                 }
 
             # Check if there's a recent OTP request (prevent spam)
-            recent_otp = self.otp_verifications.find_one({
-                "mobile": normalized_mobile,
-                "created_at": {"$gte": DateUtils.add_minutes_to_datetime(DateUtils.get_current_datetime(), -1)}
+            recent_otp = self.otp_verification.find_one({
+                "worker_id": str(worker['_id']),
+                "purpose": "login",
+                "created_datetime": {"$gte": DateUtils.add_minutes_to_datetime(DateUtils.get_current_datetime(), -1)}
             })
             
             if recent_otp:
@@ -270,33 +281,40 @@ class AppUserAuthService:
 
             # Generate new OTP
             otp = SecurityUtils.generate_otp(6)
-            expiry_time = DateUtils.add_minutes_to_datetime(DateUtils.get_current_datetime(), self.otp_expiry_minutes)
+            expiry_time = datetime.now().timestamp() + (5 * 60)  # 5 minutes from now
             
-            # Remove existing OTPs for this mobile
-            self.otp_verifications.delete_many({"mobile": normalized_mobile})
+            # Remove existing unused OTPs for this worker and purpose
+            self.otp_verification.delete_many({
+                "worker_id": str(worker['_id']),
+                "purpose": "login",
+                "is_used": False
+            })
             
             # Insert new OTP
             otp_data = {
+                "otp_id": f"OTP_{ObjectId()}",
+                "worker_id": str(worker['_id']),
                 "mobile": normalized_mobile,
                 "otp": otp,
-                "worker_id": worker['_id'],
-                "expiry_time": expiry_time,
-                "attempts": 0,
-                "is_verified": False,
-                "created_at": DateUtils.get_current_datetime(),
-                "created_time": DateUtils.get_current_time()
+                "purpose": "login",
+                "expires_at": expiry_time,
+                "is_used": False,
+                "created_at": DateUtils.get_current_date(),
+                "created_time": DateUtils.get_current_time(),
+                "created_datetime": DateUtils.get_current_datetime(),
+                **AuditUtils.build_create_meta(str(worker['_id']))
             }
             
-            result = self.otp_verifications.insert_one(otp_data)
+            result = self.otp_verification.insert_one(otp_data)
             
             return {
                 "success": True,
-                "message": f"OTP resent successfully to {normalized_mobile}",
+                "message": f"OTP sent to mobile number ending with {normalized_mobile[-4:]}",
                 "data": {
-                    "mobile": normalized_mobile,
-                    "otp": otp,  # Remove this in production
-                    "expiry_minutes": self.otp_expiry_minutes,
-                    "otp_id": str(result.inserted_id)
+                    "otp_id": otp_data['otp_id'],
+                    "mobile_masked": f"******{normalized_mobile[-4:]}",
+                    "expires_in_minutes": 5,
+                    "otp": otp  # Remove this in production
                 }
             }
             
@@ -347,15 +365,15 @@ class AppUserAuthService:
             
             new_token = pyjwt.encode(token_payload, self.jwt_secret, algorithm=self.jwt_algorithm)
                 
-            return {
-                "success": True,
+                return {
+                    "success": True,
                 "message": "Token refreshed successfully",
                 "data": {
                     "token": new_token,
                     "expires_in": 24 * 60 * 60,  # 24 hours in seconds
                     "worker_id": current_user.get('worker_id')
                 }
-            }
+                }
                 
         except Exception as e:
             return {

@@ -6,6 +6,8 @@ from .web_coupon_module import router as web_coupon_module
 from .web_master_module import router as web_master_module
 from .app_user_auth_module import router as app_user_auth_module
 from .app_coupon_module import router as app_coupon_module
+from .app_master_module import router as app_master_module
+from .app_redeem_module import router as app_redeem_module
 
 #web
 
@@ -21,6 +23,8 @@ router.include_router(
 #app routes
 router.include_router(app_user_auth_module, prefix="/api/app/auth")
 router.include_router(app_coupon_module, prefix="/api/app/coupons")
+router.include_router(app_master_module, prefix="/api/app/master")
+router.include_router(app_redeem_module, prefix="/api/app/redeem")
 
 #web routes
 router.include_router(web_user_auth_module, prefix="/api/web/auth")

@@ -568,3 +568,78 @@ class AppCouponService:
                 "message": f"Failed to get wallet balance: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
+
+    def get_coupon_scanned_history(self, request_data: dict, current_user: dict) -> dict:
+        """Get coupon scanned history for the worker"""
+        try:
+            # Get worker information
+            worker_id = current_user.get('worker_id')
+            if not worker_id:
+                return {
+                    "success": False,
+                    "message": "Worker information not found",
+                    "error": {"code": "AUTH_ERROR", "details": "Invalid worker token"}
+                }
+
+            # Extract pagination parameters
+            page = request_data.get('page', 1)
+            limit = request_data.get('limit', 20)
+            skip = (page - 1) * limit
+
+            # Get scan history with pagination (sort first, then paginate)
+            scans = list(
+                self.coupon_scanned_history.find({"worker_id": worker_id})
+                .sort("scanned_at", -1)
+                .skip(skip)
+                .limit(limit)
+            )
+
+            # Get total count
+            total_count = self.coupon_scanned_history.count_documents({"worker_id": worker_id})
+
+            # Convert ObjectId to string and format scans
+            formatted_scans = []
+            for scan in scans:
+                scan['_id'] = str(scan['_id'])
+                formatted_scans.append({
+                    "_id": scan['_id'],
+                    "coupon_id": scan.get('coupon_id', ''),
+                    "coupon_code": scan.get('coupon_code', ''),
+                    "worker_id": scan.get('worker_id', ''),
+                    "worker_name": scan.get('worker_name', ''),
+                    "worker_mobile": scan.get('worker_mobile', ''),
+                    "points_earned": scan.get('points_earned', 0),
+                    "scanned_at": scan.get('scanned_at', ''),
+                    "scanned_date": scan.get('scanned_date', ''),
+                    "scanned_time": scan.get('scanned_time', ''),
+                    "coupon_master_id": scan.get('coupon_master_id', ''),
+                    "batch_number": scan.get('batch_number', '')
+                })
+
+            # Calculate pagination info
+            total_pages = (total_count + limit - 1) // limit
+            has_next = page < total_pages
+            has_prev = page > 1
+
+            return {
+                "success": True,
+                "message": "Coupon scanned history retrieved successfully",
+                "data": {
+                    "records": formatted_scans,
+                    "pagination": {
+                        "current_page": page,
+                        "total_pages": total_pages,
+                        "total_count": total_count,
+                        "limit": limit,
+                        "has_next": has_next,
+                        "has_prev": has_prev
+                    }
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get coupon scanned history: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
