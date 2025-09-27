@@ -1484,8 +1484,19 @@ class WebMasterService:
                 else:
                     record['updated_by_name'] = None
 
+                # Add thumbnail image (first image from images array)
+                images = record.get('images', [])
+                if images and len(images) > 0:
+                    # Get only the file_url from the first image
+                    thumbnail = images[0]
+                    record['thumbnail'] = thumbnail.get('file_url')
+                else:
+                    record['thumbnail'] = None
+
                 # Remove internal fields
                 record.pop('product_name_lower', None)
+                # Remove full images array to keep response lightweight
+                record.pop('images', None)
 
             # Calculate pagination info
             total_pages = (total_count + limit - 1) // limit
