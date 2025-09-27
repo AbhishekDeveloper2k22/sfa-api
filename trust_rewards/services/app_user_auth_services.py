@@ -51,7 +51,7 @@ class AppUserAuthService:
 
             # Check if worker is active
             if worker.get('status') != 'Active':
-        return {
+                return {
                     "success": False,
                     "message": "Account is inactive. Please contact support.",
                     "error": {"code": "ACCOUNT_INACTIVE", "details": "Worker account is not active"}
@@ -90,8 +90,8 @@ class AppUserAuthService:
             
             # In production, send OTP via SMS service
             # For now, we'll return it in response (remove in production)
-                return {
-                    "success": True,
+            return {
+                "success": True,
                 "message": f"OTP sent to mobile number ending with {normalized_mobile[-4:]}",
                 "data": {
                     "otp_id": otp_data['otp_id'],
@@ -99,7 +99,7 @@ class AppUserAuthService:
                     "expires_in_minutes": 5,
                     "otp": otp  # Remove this in production
                 }
-                }
+            }
                 
         except Exception as e:
             return {
@@ -208,8 +208,8 @@ class AppUserAuthService:
                 {"$set": {"last_activity": DateUtils.get_current_date()}}
             )
 
-                return {
-                    "success": True,
+            return {
+                "success": True,
                 "message": "OTP verified successfully",
                 "data": {
                     "token": token,
@@ -227,7 +227,7 @@ class AppUserAuthService:
                     },
                     "expires_in": 24 * 60 * 60  # 24 hours in seconds
                 }
-                }
+            }
                 
         except Exception as e:
             return {
@@ -365,15 +365,15 @@ class AppUserAuthService:
             
             new_token = pyjwt.encode(token_payload, self.jwt_secret, algorithm=self.jwt_algorithm)
                 
-                return {
-                    "success": True,
+            return {
+                "success": True,
                 "message": "Token refreshed successfully",
                 "data": {
                     "token": new_token,
                     "expires_in": 24 * 60 * 60,  # 24 hours in seconds
                     "worker_id": current_user.get('worker_id')
                 }
-                }
+            }
                 
         except Exception as e:
             return {
