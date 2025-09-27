@@ -622,3 +622,189 @@ async def get_categories_hierarchical(request: Request, current_user: dict = Dep
         )
 
 
+@router.post("/gift_master_add")
+async def add_gift_master(request: Request, current_user: dict = Depends(get_current_user)):
+    """Add a new gift master with validations."""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+
+        service = WebMasterService()
+        created_by = current_user.get("user_id", 1)  # Get user_id from JWT payload
+        result = service.add_gift_master(body, created_by=created_by)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Validation failed"),
+                statuscode=400,
+                data={"error": result.get("error")}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Gift master added successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Failed to add gift master: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )
+
+
+@router.post("/gift_image_upload")
+async def upload_gift_image(
+    gift_id: str = Form(...),
+    image: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload gift image with form data."""
+    try:
+        service = WebMasterService()
+        created_by = current_user.get("user_id", 1)  # Get user_id from JWT payload
+        result = service.upload_gift_image(gift_id, image, created_by=created_by)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Upload failed"),
+                statuscode=400,
+                data={"error": result.get("error")}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Gift image uploaded successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Failed to upload gift image: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )
+
+
+@router.post("/gift_master_list")
+async def get_gift_master_list(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get paginated list of gift master records with filtering."""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+
+        service = WebMasterService()
+        result = service.get_gift_master_list(body)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get gift master list"),
+                statuscode=400,
+                data={"error": result.get("error")}
+            )
+
+        return format_response(
+            success=True,
+            msg="Gift master list retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Failed to get gift master list: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )
+
+
+@router.post("/gift_master_edit")
+async def update_gift_master(request: Request, current_user: dict = Depends(get_current_user)):
+    """Update an existing gift master with validations."""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+
+        service = WebMasterService()
+        updated_by = current_user.get("user_id", 1)  # Get user_id from JWT payload
+        result = service.update_gift_master(body, updated_by=updated_by)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Validation failed"),
+                statuscode=400,
+                data={"error": result.get("error")}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Gift master updated successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Failed to update gift master: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )
+
+
+@router.post("/gift_master_detail")
+async def get_gift_master_detail(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get detailed information of a single gift master record."""
+    try:
+        try:
+            body = await request.json()
+        except:
+            body = {}
+
+        gift_id = body.get("gift_id")
+        if not gift_id:
+            return format_response(
+                success=False,
+                msg="Gift ID is required",
+                statuscode=400,
+                data={"error": {"code": "VALIDATION_ERROR", "details": "missing_gift_id"}}
+            )
+
+        service = WebMasterService()
+        result = service.get_gift_master_detail(gift_id)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get gift detail"),
+                statuscode=400,
+                data={"error": result.get("error")}
+            )
+
+        return format_response(
+            success=True,
+            msg=result.get("message", "Gift master detail retrieved successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Failed to get gift master detail: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )
+
+
