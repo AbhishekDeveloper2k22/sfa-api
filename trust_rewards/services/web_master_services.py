@@ -370,12 +370,12 @@ class WebMasterService:
             # Get total count
             total_count = self.points_master.count_documents(query)
             
-            # Get records with pagination
+            # Get records with pagination (sort first, then paginate)
             records = list(
                 self.points_master.find(query)
+                .sort("_id", -1)
                 .skip(skip)
                 .limit(limit)
-                .sort("created_at", -1)
             )
             
             # Convert ObjectId to string and add created_by_name / updated_by_name
@@ -600,12 +600,12 @@ class WebMasterService:
             # Get total count
             total_count = self.categories.count_documents(query)
             
-            # Get records with pagination
+            # Get records with pagination (sort first, then paginate)
             records = list(
                 self.categories.find(query)
+                .sort("_id", -1)
                 .skip(skip)
                 .limit(limit)
-                .sort("created_at", -1)
             )
             
             # Convert ObjectId to string and add created_by_name / updated_by_name
@@ -662,6 +662,23 @@ class WebMasterService:
 
                 # category_name_lower ye remove
                 record.pop('category_name_lower', None)
+
+                # Add sub_category_count and product_count for each category
+                category_id = str(record['_id'])
+                
+                # Count sub-categories for this category
+                sub_category_count = self.sub_categories.count_documents({
+                    "category_id": category_id,
+                    "status": "active"
+                })
+                record['total_sub_category_count'] = sub_category_count
+                
+                # Count products for this category
+                product_count = self.product_master.count_documents({
+                    "category_id": category_id,
+                    "status": "active"
+                })
+                record['total_product_count'] = product_count
 
             # Calculate pagination info
             total_pages = (total_count + limit - 1) // limit
@@ -970,12 +987,12 @@ class WebMasterService:
             # Get total count
             total_count = self.sub_categories.count_documents(query)
             
-            # Get records with pagination
+            # Get records with pagination (sort first, then paginate)
             records = list(
                 self.sub_categories.find(query)
+                .sort("_id", -1)
                 .skip(skip)
                 .limit(limit)
-                .sort("created_at", -1)
             )
             
             # Convert ObjectId to string and add created_by_name / updated_by_name
@@ -1032,6 +1049,16 @@ class WebMasterService:
 
                 # Remove internal fields
                 record.pop('sub_category_name_lower', None)
+
+                # Add product_count for this sub-category
+                sub_category_id = str(record['_id'])
+                
+                # Count products for this sub-category
+                product_count = self.product_master.count_documents({
+                    "sub_category_id": sub_category_id,
+                    "status": "active"
+                })
+                record['total_product_count'] = product_count
 
             # Calculate pagination info
             total_pages = (total_count + limit - 1) // limit
@@ -1425,12 +1452,12 @@ class WebMasterService:
             # Get total count
             total_count = self.product_master.count_documents(query)
             
-            # Get records with pagination
+            # Get records with pagination (sort first, then paginate)
             records = list(
                 self.product_master.find(query)
+                .sort("_id", -1)
                 .skip(skip)
                 .limit(limit)
-                .sort("created_at", -1)
             )
             
             # Convert ObjectId to string and add created_by_name / updated_by_name
@@ -2279,12 +2306,12 @@ class WebMasterService:
             # Get total count
             total_count = self.gift_master.count_documents(query)
             
-            # Get records with pagination
+            # Get records with pagination (sort first, then paginate)
             records = list(
                 self.gift_master.find(query)
+                .sort("_id", -1)
                 .skip(skip)
                 .limit(limit)
-                .sort("created_at", -1)
             )
             
             # Convert ObjectId to string and add created_by_name / updated_by_name

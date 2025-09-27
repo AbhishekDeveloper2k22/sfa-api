@@ -169,3 +169,38 @@ async def ledger_summary(request: Request, current_user: dict = Depends(get_curr
             statuscode=500,
             data={"error": str(e)}
         )
+
+@router.post("/coupon_scanned_history")
+async def coupon_scanned_history(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get coupon scanned history for the worker"""
+    try:
+        # Handle empty request body gracefully
+        try:
+            request_data = await request.json()
+        except:
+            request_data = {}
+        
+        service = AppCouponService()
+        result = service.get_coupon_scanned_history(request_data, current_user)
+        
+        if result.get("success"):
+            return format_response(
+                success=True,
+                msg=result.get("message", "Coupon scanned history retrieved successfully"),
+                statuscode=200,
+                data=result.get("data", {})
+            )
+        else:
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get coupon scanned history"),
+                statuscode=400,
+                data=result.get("error", {})
+            )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=f"Error getting coupon scanned history: {str(e)}",
+            statuscode=500,
+            data={"error": str(e)}
+        )

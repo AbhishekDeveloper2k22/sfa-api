@@ -36,8 +36,8 @@ class SkilledWorkerService:
             # Get total count
             total_count = self.skilled_workers.count_documents(query)
             
-            # Get workers with pagination
-            workers = list(self.skilled_workers.find(query).skip(skip).limit(limit))
+            # Get workers with pagination (sort first, then paginate)
+            workers = list(self.skilled_workers.find(query).sort("_id", -1).skip(skip).limit(limit))
             
             # Convert to DataFrame for efficient join
             if workers:
