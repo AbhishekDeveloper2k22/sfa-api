@@ -26,6 +26,7 @@ class WebMasterService:
         self.categories = self.db["category_master"]
         self.sub_categories = self.db["sub_category_master"]
         self.product_master = self.db["product_master"]
+        self.gift_master = self.db["gift_master"]
         self.users = self.db["users"]
 
     def add_points_master(self, payload: Dict[str, Any], created_by: int = 1) -> Dict[str, Any]:
@@ -2160,6 +2161,658 @@ class WebMasterService:
             return {
                 "success": False,
                 "message": f"Failed to get hierarchical categories: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)},
+            }
+
+    def add_gift_master(self, payload: Dict[str, Any], created_by: int = 1) -> Dict[str, Any]:
+        """Add a new gift master with validations."""
+        try:
+            gift_name = (payload.get("gift_name") or "").strip()
+            description = (payload.get("description") or "").strip()
+            points_required = payload.get("points_required")
+            status = (payload.get("status") or "active").strip().lower()
+
+            # Validate gift_name
+            if not (2 <= len(gift_name) <= 100):
+                return {
+                    "success": False,
+                    "message": "Gift name must be 2–100 characters",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_gift_name"},
+                }
+
+            # Enforce uniqueness (case-insensitive) for gift name
+            existing = self.gift_master.find_one({"gift_name": {"$regex": f"^{gift_name}$", "$options": "i"}})
+            if existing:
+                return {
+                    "success": False,
+                    "message": "Gift name already exists",
+                    "error": {"code": "VALIDATION_ERROR", "details": "duplicate_gift_name"},
+                }
+
+            # Validate points_required
+            if not isinstance(points_required, (int, float)) or points_required <= 0:
+                return {
+                    "success": False,
+                    "message": "Points required must be a positive number",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_points_required"},
+                }
+
+            # Validate description
+            if not (10 <= len(description) <= 500):
+                return {
+                    "success": False,
+                    "message": "Description must be 10–500 characters",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_description"},
+                }
+
+            # Validate status
+            if status not in ("active", "inactive"):
+                return {
+                    "success": False,
+                    "message": "Status must be one of active | inactive",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_status"},
+                }
+
+            # Use AuditUtils for consistent audit fields
+            create_meta = AuditUtils.build_create_meta(created_by)
+            
+            doc = {
+                "gift_name": gift_name,
+                "gift_name_lower": gift_name.lower(),
+                "description": description,
+                "points_required": points_required,
+                "status": status,
+                **create_meta  # Spread created_at, created_time, created_by
+            }
+
+            result = self.gift_master.insert_one(doc)
+
+            return {
+                "success": True,
+                "message": "Gift master added successfully",
+                "data": {
+                    "_id": str(result.inserted_id),
+                    "gift_name": gift_name,
+                    "description": description,
+                    "points_required": points_required,
+                    "status": status,
+                    "created_at": create_meta["created_at"],
+                    "created_time": create_meta["created_time"],
+                    "created_by": create_meta["created_by"],
+                },
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to add gift master: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)},
+            }
+
+    def get_gift_master_list(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Get paginated list of gift master records with filtering."""
+        try:
+            # Extract pagination parameters
+            page = request_data.get('page', 1)
+            limit = request_data.get('limit', 10)
+            skip = (page - 1) * limit
+
+            # Extract filters
+            filters = request_data.get('filters', {})
+            status = filters.get('status', 'all')
+            search = filters.get('search', '')
+
+            # Build query
+            query = {}
+            
+            # Status filter
+            if status and status != 'all':
+                query['status'] = status
+            
+            # Search filter (search in gift_name and description)
+            if search and search.strip():
+                query['$or'] = [
+                    {"gift_name": {"$regex": search, "$options": "i"}},
+                    {"description": {"$regex": search, "$options": "i"}}
+                ]
+
+            # Get total count
+            total_count = self.gift_master.count_documents(query)
+            
+            # Get records with pagination
+            records = list(
+                self.gift_master.find(query)
+                .skip(skip)
+                .limit(limit)
+                .sort("created_at", -1)
+            )
+            
+            # Convert ObjectId to string and add created_by_name / updated_by_name
+            datetime_utils = important_utilities()
+            
+            for record in records:
+                record['_id'] = str(record['_id'])
+                
+                # Combine created_at and created_time into created_datetime
+                created_at = record.get('created_at', '')
+                created_time = record.get('created_time', '')
+                if created_at and created_time:
+                    try:
+                        created_datetime = datetime.strptime(f"{created_at} {created_time}", "%Y-%m-%d %H:%M:%S")
+                        record['created_datetime'] = created_datetime.strftime("%d-%m-%Y %I:%M %p")
+                    except:
+                        record['created_datetime'] = f"{created_at} {created_time}"
+                else:
+                    record['created_datetime'] = None
+                
+                # Combine updated_at and updated_time into updated_datetime if available
+                updated_at = record.get('updated_at')
+                updated_time = record.get('updated_time')
+                if updated_at and updated_time:
+                    try:
+                        updated_datetime = datetime.strptime(f"{updated_at} {updated_time}", "%Y-%m-%d %H:%M:%S")
+                        record['updated_datetime'] = updated_datetime.strftime("%d-%m-%Y %I:%M %p")
+                    except:
+                        record['updated_datetime'] = f"{updated_at} {updated_time}"
+                else:
+                    record['updated_datetime'] = None
+                
+                # Get created_by_name from users collection
+                created_by_id = record.get('created_by')
+                if created_by_id:
+                    user = self.users.find_one({"user_id": created_by_id})
+                    if user:
+                        record['created_by_name'] = user.get('username', 'Unknown')
+                    else:
+                        record['created_by_name'] = 'Unknown'
+                else:
+                    record['created_by_name'] = 'Unknown'
+
+                # Get updated_by_name from users collection if available
+                updated_by_id = record.get('updated_by')
+                if updated_by_id:
+                    upd_user = self.users.find_one({"user_id": updated_by_id})
+                    if upd_user:
+                        record['updated_by_name'] = upd_user.get('username', 'Unknown')
+                    else:
+                        record['updated_by_name'] = 'Unknown'
+                else:
+                    record['updated_by_name'] = None
+
+                # Add thumbnail image (first image from images array)
+                images = record.get('images', [])
+                if images and len(images) > 0:
+                    # Get only the file_url from the first image
+                    thumbnail = images[0]
+                    record['thumbnail'] = thumbnail.get('file_url')
+                else:
+                    record['thumbnail'] = None
+
+                # Remove internal fields
+                record.pop('gift_name_lower', None)
+                # Remove full images array to keep response lightweight
+                record.pop('images', None)
+
+            # Calculate pagination info
+            total_pages = (total_count + limit - 1) // limit
+            has_next = page < total_pages
+            has_prev = page > 1
+
+            # Get stats data
+            stats = self.get_gift_master_stats()
+
+            return {
+                "success": True,
+                "data": {
+                    "records": records,
+                    "stats": stats,
+                    "pagination": {
+                        "current_page": page,
+                        "total_pages": total_pages,
+                        "total_count": total_count,
+                        "limit": limit,
+                        "has_next": has_next,
+                        "has_prev": has_prev
+                    }
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get gift master list: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def update_gift_master(self, payload: Dict[str, Any], updated_by: int = 1) -> Dict[str, Any]:
+        """Update an existing gift master with validations."""
+        try:
+            # Extract record ID
+            record_id = payload.get('_id') or payload.get('id')
+            if not record_id:
+                return {
+                    "success": False,
+                    "message": "Record ID is required for update",
+                    "error": {"code": "VALIDATION_ERROR", "details": "missing_record_id"},
+                }
+
+            # Check if record exists
+            existing_record = self.gift_master.find_one({"_id": ObjectId(record_id)})
+            if not existing_record:
+                return {
+                    "success": False,
+                    "message": "Gift master not found",
+                    "error": {"code": "VALIDATION_ERROR", "details": "record_not_found"},
+                }
+
+            # Extract and validate input data
+            gift_name = (payload.get("gift_name") or "").strip()
+            description = (payload.get("description") or "").strip()
+            points_required = payload.get("points_required")
+            status = (payload.get("status") or "active").strip().lower()
+            images = payload.get("images", [])  # Handle images array
+
+            # Validate gift_name
+            if not (2 <= len(gift_name) <= 100):
+                return {
+                    "success": False,
+                    "message": "Gift name must be 2–100 characters",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_gift_name"},
+                }
+
+            # Enforce uniqueness (case-insensitive) - exclude current record
+            existing = self.gift_master.find_one({
+                "gift_name": {"$regex": f"^{gift_name}$", "$options": "i"},
+                "_id": {"$ne": ObjectId(record_id)}
+            })
+            if existing:
+                return {
+                    "success": False,
+                    "message": "Gift name already exists",
+                    "error": {"code": "VALIDATION_ERROR", "details": "duplicate_gift_name"},
+                }
+
+            # Validate points_required
+            if not isinstance(points_required, (int, float)) or points_required <= 0:
+                return {
+                    "success": False,
+                    "message": "Points required must be a positive number",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_points_required"},
+                }
+
+            # Validate description
+            if not (10 <= len(description) <= 500):
+                return {
+                    "success": False,
+                    "message": "Description must be 10–500 characters",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_description"},
+                }
+
+            # Validate status
+            if status not in ("active", "inactive"):
+                return {
+                    "success": False,
+                    "message": "Status must be one of active | inactive",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_status"},
+                }
+
+            # Validate images array if provided
+            if images and not isinstance(images, list):
+                return {
+                    "success": False,
+                    "message": "Images must be an array",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_images_format"},
+                }
+
+            # Use AuditUtils for consistent audit fields
+            update_meta = AuditUtils.build_update_meta(updated_by)
+            
+            # Update record
+            update_doc = {
+                "gift_name": gift_name,
+                "gift_name_lower": gift_name.lower(),
+                "description": description,
+                "points_required": points_required,
+                "status": status,
+                **update_meta  # Spread updated_at, updated_time, updated_by
+            }
+
+            # Add images array if provided
+            if images:
+                update_doc["images"] = images
+
+            result = self.gift_master.update_one(
+                {"_id": ObjectId(record_id)},
+                {"$set": update_doc}
+            )
+
+            if result.modified_count == 0:
+                return {
+                    "success": False,
+                    "message": "No changes made to the record",
+                    "error": {"code": "UPDATE_ERROR", "details": "no_changes"},
+                }
+
+            # Get updated record
+            updated_record = self.gift_master.find_one({"_id": ObjectId(record_id)})
+            updated_record['_id'] = str(updated_record['_id'])
+
+            # Add created_by_name
+            created_by_id = updated_record.get('created_by')
+            if created_by_id:
+                user = self.users.find_one({"user_id": created_by_id})
+                if user:
+                    updated_record['created_by_name'] = user.get('username', 'Unknown')
+                else:
+                    updated_record['created_by_name'] = 'Unknown'
+            else:
+                updated_record['created_by_name'] = 'Unknown'
+
+            return {
+                "success": True,
+                "message": "Gift master updated successfully",
+                "data": {
+                    "_id": updated_record['_id'],
+                    "gift_name": gift_name,
+                    "description": description,
+                    "points_required": points_required,
+                    "status": status,
+                    "images": updated_record.get("images", []),
+                    "created_at": updated_record.get("created_at"),
+                    "created_time": updated_record.get("created_time"),
+                    "created_by": updated_record.get("created_by"),
+                    "created_by_name": updated_record.get("created_by_name"),
+                    "updated_at": update_meta["updated_at"],
+                    "updated_time": update_meta["updated_time"],
+                    "updated_by": update_meta["updated_by"],
+                },
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to update gift master: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)},
+            }
+
+    def get_gift_master_detail(self, gift_id: str) -> Dict[str, Any]:
+        """Get detailed information of a single gift master record."""
+        try:
+            # Validate gift_id
+            if not gift_id:
+                return {
+                    "success": False,
+                    "message": "Gift ID is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "missing_gift_id"},
+                }
+
+            # Check if gift exists
+            gift = self.gift_master.find_one({"_id": ObjectId(gift_id)})
+            if not gift:
+                return {
+                    "success": False,
+                    "message": "Gift not found",
+                    "error": {"code": "VALIDATION_ERROR", "details": "gift_not_found"},
+                }
+
+            # Convert ObjectId to string
+            gift['_id'] = str(gift['_id'])
+
+            # Combine created_at and created_time into created_datetime
+            created_at = gift.get('created_at', '')
+            created_time = gift.get('created_time', '')
+            if created_at and created_time:
+                try:
+                    created_datetime = datetime.strptime(f"{created_at} {created_time}", "%Y-%m-%d %H:%M:%S")
+                    gift['created_datetime'] = created_datetime.strftime("%d-%m-%Y %I:%M %p")
+                except:
+                    gift['created_datetime'] = f"{created_at} {created_time}"
+            else:
+                gift['created_datetime'] = None
+
+            # Combine updated_at and updated_time into updated_datetime if available
+            updated_at = gift.get('updated_at')
+            updated_time = gift.get('updated_time')
+            if updated_at and updated_time:
+                try:
+                    updated_datetime = datetime.strptime(f"{updated_at} {updated_time}", "%Y-%m-%d %H:%M:%S")
+                    gift['updated_datetime'] = updated_datetime.strftime("%d-%m-%Y %I:%M %p")
+                except:
+                    gift['updated_datetime'] = f"{updated_at} {updated_time}"
+            else:
+                gift['updated_datetime'] = None
+
+            # Get created_by_name from users collection
+            created_by_id = gift.get('created_by')
+            if created_by_id:
+                user = self.users.find_one({"user_id": created_by_id})
+                if user:
+                    gift['created_by_name'] = user.get('username', 'Unknown')
+                else:
+                    gift['created_by_name'] = 'Unknown'
+            else:
+                gift['created_by_name'] = 'Unknown'
+
+            # Get updated_by_name from users collection if available
+            updated_by_id = gift.get('updated_by')
+            if updated_by_id:
+                upd_user = self.users.find_one({"user_id": updated_by_id})
+                if upd_user:
+                    gift['updated_by_name'] = upd_user.get('username', 'Unknown')
+                else:
+                    gift['updated_by_name'] = 'Unknown'
+            else:
+                gift['updated_by_name'] = None
+
+            # Remove internal fields
+            gift.pop('gift_name_lower', None)
+
+            # Simplify images array to only include image_id and file_url
+            if 'images' in gift and gift['images']:
+                simplified_images = []
+                for image in gift['images']:
+                    simplified_images.append({
+                        'image_id': image.get('image_id'),
+                        'file_url': image.get('file_url')
+                    })
+                gift['images'] = simplified_images
+
+            return {
+                "success": True,
+                "message": "Gift master detail retrieved successfully",
+                "data": gift
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get gift master detail: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_gift_master_stats(self) -> Dict[str, Any]:
+        """Get gift master statistics for dashboard."""
+        try:
+            # Total gifts
+            total_gifts = self.gift_master.count_documents({})
+            
+            # Active gifts
+            active_gifts = self.gift_master.count_documents({"status": "active"})
+            
+            # Inactive gifts
+            inactive_gifts = self.gift_master.count_documents({"status": "inactive"})
+            
+            # Total points required (sum of all active gifts)
+            points_pipeline = [
+                {"$match": {"status": "active"}},
+                {"$group": {"_id": None, "total_points": {"$sum": "$points_required"}}}
+            ]
+            points_result = list(self.gift_master.aggregate(points_pipeline))
+            total_points = points_result[0]["total_points"] if points_result else 0
+            
+            return {
+                "total_gifts": total_gifts,
+                "active_gifts": active_gifts,
+                "inactive_gifts": inactive_gifts,
+                "total_points": total_points,
+            }
+            
+        except Exception as e:
+            return {
+                "total_gifts": 0,
+                "active_gifts": 0,
+                "inactive_gifts": 0,
+                "total_points": 0,
+            }
+
+    def upload_gift_image(self, gift_id: str, image_file, created_by: int = 1) -> Dict[str, Any]:
+        """Upload gift image and save file details in gift_master images array."""
+        try:
+            # Validate gift_id
+            if not gift_id:
+                return {
+                    "success": False,
+                    "message": "Gift ID is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "missing_gift_id"},
+                }
+
+            # Check if gift exists
+            gift = self.gift_master.find_one({"_id": ObjectId(gift_id)})
+            if not gift:
+                return {
+                    "success": False,
+                    "message": "Gift not found",
+                    "error": {"code": "VALIDATION_ERROR", "details": "gift_not_found"},
+                }
+
+            # Validate image file
+            if not image_file:
+                return {
+                    "success": False,
+                    "message": "Image file is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "missing_image_file"},
+                }
+
+            # Check file type
+            allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+            if image_file.content_type not in allowed_types:
+                return {
+                    "success": False,
+                    "message": "Invalid file type. Only JPEG, PNG, GIF, and WebP images are allowed",
+                    "error": {"code": "VALIDATION_ERROR", "details": "invalid_file_type"},
+                }
+
+            # Check file size (max 5MB)
+            max_size = 5 * 1024 * 1024  # 5MB in bytes
+            if len(image_file.file.read()) > max_size:
+                return {
+                    "success": False,
+                    "message": "File size too large. Maximum size is 5MB",
+                    "error": {"code": "VALIDATION_ERROR", "details": "file_too_large"},
+                }
+
+            # Reset file pointer
+            image_file.file.seek(0)
+
+            # Generate unique filename
+            file_extension = image_file.filename.split('.')[-1] if '.' in image_file.filename else 'jpg'
+            unique_filename = f"{uuid.uuid4()}.{file_extension}"
+            
+            # Create upload directory if it doesn't exist
+            upload_dir = "uploads/trust_rewards/gifts"
+            os.makedirs(upload_dir, exist_ok=True)
+            
+            # Save file path
+            file_path = os.path.join(upload_dir, unique_filename)
+            
+            # Process and save image
+            try:
+                if PIL_AVAILABLE:
+                    # Use PIL for image processing
+                    image = Image.open(io.BytesIO(image_file.file.read()))
+                    
+                    # Convert to RGB if necessary (for JPEG compatibility)
+                    if image.mode in ('RGBA', 'LA', 'P'):
+                        image = image.convert('RGB')
+                    
+                    # Resize image if too large (max 1920x1080)
+                    max_width, max_height = 1920, 1080
+                    if image.width > max_width or image.height > max_height:
+                        image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+                    
+                    # Save processed image
+                    image.save(file_path, 'JPEG', quality=85, optimize=True)
+                    
+                    # Get image dimensions
+                    image_width, image_height = image.size
+                else:
+                    # Fallback: Save file without processing if PIL is not available
+                    with open(file_path, 'wb') as f:
+                        f.write(image_file.file.read())
+                    
+                    # Set default dimensions if PIL is not available
+                    image_width, image_height = 0, 0
+                
+            except Exception as e:
+                return {
+                    "success": False,
+                    "message": f"Failed to process image: {str(e)}",
+                    "error": {"code": "PROCESSING_ERROR", "details": str(e)},
+                }
+
+            file_size = os.path.getsize(file_path)
+
+            # Use AuditUtils for consistent audit fields
+            create_meta = AuditUtils.build_create_meta(created_by)
+            
+            # Prepare image data for array
+            image_data = {
+                "image_id": str(uuid.uuid4()),  # Unique ID for each image
+                "original_filename": image_file.filename,
+                "stored_filename": unique_filename,
+                "file_path": file_path.replace("\\", "/"),  # Use forward slashes
+                "file_url": f"/{file_path.replace(chr(92), '/')}",  # URL for frontend
+                "content_type": image_file.content_type,  # Use original content type
+                "file_size": file_size,
+                "image_width": image_width,
+                "image_height": image_height,
+                "is_primary": False,  # Default to False, can be updated later
+            }
+
+            # Get existing images array or create empty one
+            existing_images = gift.get("images", [])
+            
+            # Add new image to the array
+            existing_images.append(image_data)
+
+            # Update gift with new images array
+            result = self.gift_master.update_one(
+                {"_id": ObjectId(gift_id)},
+                {"$set": {"images": existing_images}}
+            )
+
+            if result.modified_count == 0:
+                return {
+                    "success": False,
+                    "message": "Failed to update gift with image",
+                    "error": {"code": "UPDATE_ERROR", "details": "no_changes"},
+                }
+
+            return {
+                "success": True,
+                "message": "Gift image uploaded successfully",
+                "data": {
+                    "gift_id": gift_id,
+                    "gift_name": gift.get("gift_name", ""),
+                    "image_data": image_data,
+                    "total_images": len(existing_images)
+                },
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to upload gift image: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)},
             }
 
