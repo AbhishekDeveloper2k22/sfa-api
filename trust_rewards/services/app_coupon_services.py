@@ -59,11 +59,12 @@ class AppCouponService:
                     "error": {"code": "ACCOUNT_INACTIVE", "details": "Worker account is not active"}
                 }
 
-            # Process each coupon
+            # Process each coupon and create individual transactions
             results = []
             total_points_earned = 0
             successful_scans = 0
             failed_scans = 0
+            current_balance = self._get_worker_balance(worker_id)
 
             for coupon_code in coupon_codes:
                 coupon_result = self._process_single_coupon(coupon_code, worker)
@@ -71,42 +72,41 @@ class AppCouponService:
                 
                 if coupon_result['success']:
                     successful_scans += 1
-                    total_points_earned += coupon_result.get('points_earned', 0)
+                    points_earned = coupon_result.get('points_earned', 0)
+                    total_points_earned += points_earned
+                    
+                    # Update worker's wallet points for this single coupon
+                    self.skilled_workers.update_one(
+                        {"_id": ObjectId(worker_id)},
+                        {
+                            "$inc": {
+                                "wallet_points": points_earned,
+                                "coupons_scanned": 1
+                            },
+                            "$set": {
+                                "last_activity": DateUtils.get_current_date()
+                            }
+                        }
+                    )
+                    
+                    # Record individual transaction for this coupon
+                    new_balance = current_balance + points_earned
+                    self._record_transaction(
+                        worker_id=worker_id,
+                        transaction_type="COUPON_SCAN",
+                        amount=points_earned,
+                        description=f"Scanned coupon: {coupon_code}",
+                        previous_balance=current_balance,
+                        new_balance=new_balance,
+                        reference_id=coupon_result.get('coupon_id', ''),
+                        reference_type="coupon_code",
+                        batch_number=coupon_result.get('batch_number', '')
+                    )
+                    
+                    # Update current balance for next transaction
+                    current_balance = new_balance
                 else:
                     failed_scans += 1
-
-            # Get current balance before updating
-            current_balance = self._get_worker_balance(worker_id)
-            new_balance = current_balance + total_points_earned
-
-            # Update worker's wallet points and coupons scanned count
-            if successful_scans > 0:
-                self.skilled_workers.update_one(
-                    {"_id": ObjectId(worker_id)},
-                    {
-                        "$inc": {
-                            "wallet_points": total_points_earned,
-                            "coupons_scanned": successful_scans
-                        },
-                        "$set": {
-                            "last_activity": DateUtils.get_current_date()
-                        }
-                    }
-                )
-
-            # Record transaction in ledger for successful scans
-            if successful_scans > 0:
-                self._record_transaction(
-                    worker_id=worker_id,
-                    transaction_type="COUPON_SCAN",
-                    amount=total_points_earned,
-                    description=f"Scanned {successful_scans} coupons",
-                    previous_balance=current_balance,
-                    new_balance=new_balance,
-                    reference_id="",  # Multiple coupons, no single reference
-                    reference_type="multiple_coupons",
-                    batch_number=""
-                )
 
             return {
                 "success": True,
@@ -121,7 +121,7 @@ class AppCouponService:
                         "worker_id": str(worker['_id']),
                         "name": worker.get('name', ''),
                         "worker_type": worker.get('worker_type', ''),
-                        "new_wallet_balance": new_balance,
+                        "new_wallet_balance": current_balance,
                         "total_coupons_scanned": worker.get('coupons_scanned', 0) + successful_scans
                     }
                 }
@@ -234,6 +234,7 @@ class AppCouponService:
             return {
                 "success": True,
                 "coupon_code": coupon_code,
+                "coupon_id": str(coupon['_id']),  # Add coupon ID for reference
                 "points_earned": points_earned,
                 "batch_number": coupon_master.get('batch_number', '') if coupon_master else '',
                 "message": "Coupon scanned successfully"

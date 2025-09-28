@@ -224,7 +224,7 @@ class SecurityUtils:
 class AuditUtils:
     """Utilities for created/updated audit fields"""
     @staticmethod
-    def build_create_meta(user_id: int) -> Dict[str, Any]:
+    def build_create_meta(user_id) -> Dict[str, Any]:
         now = datetime.now()
         return {
             "created_at": now.strftime("%Y-%m-%d"),
@@ -233,7 +233,7 @@ class AuditUtils:
         }
 
     @staticmethod
-    def build_update_meta(user_id: int) -> Dict[str, Any]:
+    def build_update_meta(user_id) -> Dict[str, Any]:
         now = datetime.now()
         return {
             "updated_at": now.strftime("%Y-%m-%d"),
