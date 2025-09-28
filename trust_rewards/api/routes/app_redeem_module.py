@@ -268,3 +268,60 @@ async def verify_otp_for_redemption(request: Request, current_user: dict = Depen
                 }
             }
         )
+
+@router.post("/cancel_redemption")
+async def cancel_redemption(request: Request, current_user: dict = Depends(get_current_user)):
+    """Cancel a gift redemption and return points to wallet"""
+    try:
+        # Handle empty request body gracefully
+        try:
+            request_data = await request.json()
+        except:
+            request_data = {}
+        
+        # Validate required parameters
+        if not request_data.get('redemption_id'):
+            return format_response(
+                success=False,
+                msg="redemption_id is required",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "redemption_id is mandatory"
+                    }
+                }
+            )
+        
+        service = AppRedeemService()
+        result = service.cancel_redemption(request_data, current_user)
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to cancel redemption"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg="Redemption cancelled successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+        
+    except Exception as e:
+        tb = traceback.format_exc()
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": str(e),
+                    "traceback": tb
+                }
+            }
+        )

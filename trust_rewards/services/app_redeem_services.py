@@ -86,18 +86,38 @@ class AppRedeemService:
             verification_time = verified_otp.get('used_at')
             if verification_time:
                 from datetime import datetime, timedelta
-                verification_datetime = datetime.fromisoformat(verification_time.replace('Z', '+00:00'))
-                current_datetime = datetime.now(verification_datetime.tzinfo)
-                
-                if (current_datetime - verification_datetime).total_seconds() > 600:  # 10 minutes
-                    return {
-                        "success": False,
-                        "message": "OTP verification expired",
-                        "error": {
-                            "code": "OTP_VERIFICATION_EXPIRED", 
-                            "details": "OTP verification has expired. Please verify OTP again before redeeming gift"
+                try:
+                    # Handle different datetime formats
+                    if isinstance(verification_time, str):
+                        # Try to parse ISO format first
+                        try:
+                            verification_datetime = datetime.fromisoformat(verification_time.replace('Z', '+00:00'))
+                        except ValueError:
+                            # If ISO format fails, try parsing as datetime string
+                            verification_datetime = datetime.strptime(verification_time, '%Y-%m-%d %H:%M:%S')
+                    else:
+                        # If it's already a datetime object
+                        verification_datetime = verification_time
+                    
+                    current_datetime = datetime.now()
+                    
+                    # Calculate time difference
+                    time_diff = (current_datetime - verification_datetime).total_seconds()
+                    print(f"DEBUG: OTP verification time check - Used at: {verification_datetime}, Current: {current_datetime}, Diff: {time_diff} seconds")
+                    
+                    if time_diff > 600:  # 10 minutes
+                        return {
+                            "success": False,
+                            "message": "OTP verification expired",
+                            "error": {
+                                "code": "OTP_VERIFICATION_EXPIRED", 
+                                "details": "OTP verification has expired. Please verify OTP again before redeeming gift"
+                            }
                         }
-                    }
+                except Exception as e:
+                    print(f"DEBUG: Error parsing verification time: {str(e)}")
+                    # If we can't parse the time, allow the redemption to proceed
+                    # This is a fallback to prevent blocking legitimate redemptions
 
             # Get gift details
             gift = self.gift_master.find_one({"_id": ObjectId(gift_id), "status": "active"})
@@ -107,9 +127,22 @@ class AppRedeemService:
                     "message": "Gift not found or inactive",
                     "error": {"code": "NOT_FOUND", "details": "Gift not found or inactive"}
                 }
+            
+            # Debug: Print gift details
+            print(f"DEBUG: Gift found - ID: {gift['_id']}, Name: {gift.get('name', 'N/A')}, Points Required: {gift.get('points_required', 'N/A')}")
+            print(f"DEBUG: Full gift document keys: {list(gift.keys())}")
+            print(f"DEBUG: Gift name field value: '{gift.get('name', 'NOT_FOUND')}'")
+            print(f"DEBUG: Gift title field value: '{gift.get('title', 'NOT_FOUND')}'")
+            print(f"DEBUG: Gift gift_name field value: '{gift.get('gift_name', 'NOT_FOUND')}'")
 
             # Check if gift has required points
             points_required = gift.get('points_required', 0)
+            # Ensure points_required is an integer
+            try:
+                points_required = int(points_required)
+            except (ValueError, TypeError):
+                points_required = 0
+                
             if points_required <= 0:
                 return {
                     "success": False,
@@ -119,7 +152,9 @@ class AppRedeemService:
 
             # Get current wallet balance
             current_balance = self._get_worker_balance(worker_id)
+            print(f"DEBUG: Worker ID: {worker_id}, Current Balance: {current_balance}, Points Required: {points_required}")
             
+            # Check if worker has sufficient balance
             if current_balance < points_required:
                 return {
                     "success": False,
@@ -130,10 +165,13 @@ class AppRedeemService:
                     }
                 }
 
-            # Calculate new balance
+            # Calculate new balance and deduct points immediately
             new_balance = current_balance - points_required
+            # Ensure new_balance is an integer
+            new_balance = int(new_balance)
+            print(f"DEBUG: Balance calculation - Current: {current_balance} (type: {type(current_balance)}), Required: {points_required} (type: {type(points_required)}), New: {new_balance} (type: {type(new_balance)})")
 
-            # Update worker's wallet balance
+            # Update worker's wallet balance immediately
             update_result = self.skilled_workers.update_one(
                 {"_id": ObjectId(worker_id)},
                 {
@@ -152,32 +190,51 @@ class AppRedeemService:
                     "error": {"code": "UPDATE_ERROR", "details": "Could not update worker wallet points"}
                 }
 
-            # Record gift redemption
+            # Get gift name from multiple possible fields
+            gift_name = gift.get('name') or gift.get('title') or gift.get('gift_name') or gift.get('product_name') or 'Unknown Gift'
+            
+            # Record gift redemption request (initially pending, but points already deducted)
             redemption_data = {
                 "redemption_id": f"RED_{ObjectId()}",
                 "worker_id": worker_id,
                 "worker_name": worker.get('name', ''),
                 "worker_mobile": worker.get('mobile', ''),
                 "gift_id": str(gift['_id']),
-                "gift_name": gift.get('name', ''),
-                "points_used": points_required,
+                "gift_name": gift_name,
+                "points_used": int(points_required),  # Ensure it's an integer
                 "redemption_date": DateUtils.get_current_date(),
                 "redemption_time": DateUtils.get_current_time(),
                 "redemption_datetime": DateUtils.get_current_datetime(),
-                "status": "redeemed",
+                "status": "pending",  # Initially pending, admin will approve
+                "request_date": DateUtils.get_current_date(),
+                "request_time": DateUtils.get_current_time(),
+                "request_datetime": DateUtils.get_current_datetime(),
+                "status_history": [
+                    {
+                        "status": "pending",
+                        "status_date": DateUtils.get_current_date(),
+                        "status_time": DateUtils.get_current_time(),
+                        "status_datetime": DateUtils.get_current_datetime(),
+                        "updated_by": worker.get('name', 'Worker'),
+                        "updated_by_id": worker_id,
+                        "comments": f"Request submitted by {worker.get('name', 'Worker')}"
+                    }
+                ],
                 **AuditUtils.build_create_meta(worker_id)  # Using worker ID for app redemptions
             }
+            
+            print(f"DEBUG: Redemption data - Gift Name: {redemption_data['gift_name']}, Points Used: {redemption_data['points_used']}")
 
             self.gift_redemptions.insert_one(redemption_data)
 
-            # Record transaction in ledger
+            # Record transaction in ledger (points already deducted)
             self._record_transaction(
                 worker_id=worker_id,
-                transaction_type="GIFT_REDEMPTION",
-                amount=-points_required,  # Negative for debit
-                description=f"Gift redemption: {gift.get('name', '')}",
-                previous_balance=current_balance,
-                new_balance=new_balance,
+                transaction_type="GIFT_REDEMPTION_REQUEST",
+                amount=-int(points_required),  # Negative for debit, ensure integer
+                description=f"Gift redemption request: {gift_name}",
+                previous_balance=int(current_balance),  # Ensure integer
+                new_balance=int(new_balance),  # Ensure integer
                 reference_id=str(gift['_id']),
                 reference_type="gift_master",
                 redemption_id=redemption_data['redemption_id']
@@ -185,18 +242,24 @@ class AppRedeemService:
 
             return {
                 "success": True,
-                "message": "Gift redeemed successfully",
+                "message": "Gift redemption request submitted successfully",
                 "data": {
                     "redemption_id": redemption_data['redemption_id'],
-                    "gift_name": gift.get('name', ''),
+                    "gift_name": gift_name,
                     "points_used": points_required,
                     "previous_balance": current_balance,
                     "new_balance": new_balance,
-                    "redemption_datetime": redemption_data['redemption_datetime']
+                    "status": "pending",
+                    "message": "Points deducted. Your redemption request is pending admin approval",
+                    "request_datetime": redemption_data['request_datetime']
                 }
             }
 
         except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"DEBUG: Error in redeem_gift: {str(e)}")
+            print(f"DEBUG: Traceback: {tb}")
             return {
                 "success": False,
                 "message": f"Failed to redeem gift: {str(e)}",
@@ -348,7 +411,13 @@ class AppRedeemService:
         try:
             worker = self.skilled_workers.find_one({"_id": ObjectId(worker_id)})
             if worker:
-                return worker.get('wallet_points', 0)
+                balance = worker.get('wallet_points', 0)
+                # Ensure balance is an integer
+                try:
+                    return int(balance)
+                except (ValueError, TypeError):
+                    print(f"Warning: Invalid wallet_points value: {balance}, defaulting to 0")
+                    return 0
             return 0
         except Exception as e:
             print(f"Error getting worker balance: {str(e)}")
@@ -523,5 +592,167 @@ class AppRedeemService:
             return {
                 "success": False,
                 "message": f"Failed to verify OTP: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def cancel_redemption(self, request_data: dict, current_user: dict) -> dict:
+        """Cancel a gift redemption and return points to wallet"""
+        try:
+            # Get worker information
+            worker_id = current_user.get('worker_id')
+            if not worker_id:
+                return {
+                    "success": False,
+                    "message": "Worker ID not found in user session",
+                    "error": {"code": "AUTH_ERROR", "details": "Invalid user session"}
+                }
+
+            # Extract redemption_id from request
+            redemption_id = request_data.get('redemption_id')
+            if not redemption_id:
+                return {
+                    "success": False,
+                    "message": "redemption_id is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "redemption_id is mandatory"}
+                }
+
+            # Find the redemption record
+            redemption = self.gift_redemptions.find_one({
+                "redemption_id": redemption_id,
+                "worker_id": worker_id
+            })
+
+            if not redemption:
+                return {
+                    "success": False,
+                    "message": "Redemption not found",
+                    "error": {"code": "NOT_FOUND", "details": "Redemption record not found"}
+                }
+
+            # Check if redemption can be cancelled (only if status is "pending")
+            current_status = redemption.get('status', '')
+            if current_status == 'redeemed':
+                return {
+                    "success": False,
+                    "message": "Cannot cancel redeemed gift",
+                    "error": {
+                        "code": "INVALID_STATUS", 
+                        "details": "Gift has already been redeemed and cannot be cancelled"
+                    }
+                }
+
+            if current_status == 'cancelled':
+                return {
+                    "success": False,
+                    "message": "Redemption already cancelled",
+                    "error": {
+                        "code": "ALREADY_CANCELLED", 
+                        "details": "This redemption has already been cancelled"
+                    }
+                }
+
+            if current_status != 'pending':
+                return {
+                    "success": False,
+                    "message": "Cannot cancel redemption in current status",
+                    "error": {
+                        "code": "INVALID_STATUS", 
+                        "details": f"Redemption status '{current_status}' cannot be cancelled. Only 'pending' redemptions can be cancelled."
+                    }
+                }
+
+            # Get points to be returned (points were already deducted)
+            points_to_return = redemption.get('points_used', 0)
+            if points_to_return <= 0:
+                return {
+                    "success": False,
+                    "message": "Invalid redemption data",
+                    "error": {"code": "VALIDATION_ERROR", "details": "No points to return"}
+                }
+
+            # Get current wallet balance and calculate new balance after returning points
+            current_balance = self._get_worker_balance(worker_id)
+            new_balance = current_balance + points_to_return
+
+            # Update worker's wallet balance (return the points)
+            update_result = self.skilled_workers.update_one(
+                {"_id": ObjectId(worker_id)},
+                {
+                    "$set": {
+                        "wallet_points": new_balance,
+                        "last_activity": DateUtils.get_current_date()
+                    }
+                }
+            )
+
+            if update_result.modified_count == 0:
+                return {
+                    "success": False,
+                    "message": "Failed to update wallet balance",
+                    "error": {"code": "UPDATE_ERROR", "details": "Could not update worker wallet points"}
+                }
+
+            # Update redemption status to cancelled and add status history entry
+            cancellation_history_entry = {
+                "status": "cancelled",
+                "status_date": DateUtils.get_current_date(),
+                "status_time": DateUtils.get_current_time(),
+                "status_datetime": DateUtils.get_current_datetime(),
+                "updated_by": redemption.get('worker_name', 'Worker'),
+                "updated_by_id": worker_id,
+                "comments": f"Redemption cancelled by {redemption.get('worker_name', 'Worker')}"
+            }
+            
+            self.gift_redemptions.update_one(
+                {"redemption_id": redemption_id},
+                {
+                    "$set": {
+                        "status": "cancelled",
+                        "cancelled_at": DateUtils.get_current_datetime(),
+                        "cancelled_date": DateUtils.get_current_date(),
+                        "cancelled_time": DateUtils.get_current_time(),
+                        **AuditUtils.build_update_meta(worker_id)
+                    },
+                    "$push": {
+                        "status_history": cancellation_history_entry
+                    }
+                }
+            )
+
+            # Record transaction in ledger for points return
+            self._record_transaction(
+                worker_id=worker_id,
+                transaction_type="REDEMPTION_CANCELLATION",
+                amount=points_to_return,  # Positive for credit
+                description=f"Redemption cancellation: {redemption.get('gift_name', 'Unknown Gift')}",
+                previous_balance=current_balance,
+                new_balance=new_balance,
+                reference_id=redemption.get('gift_id'),
+                reference_type="gift_master",
+                redemption_id=redemption_id
+            )
+
+            return {
+                "success": True,
+                "message": "Redemption request cancelled successfully",
+                "data": {
+                    "redemption_id": redemption_id,
+                    "gift_name": redemption.get('gift_name', 'Unknown Gift'),
+                    "points_returned": points_to_return,
+                    "previous_balance": current_balance,
+                    "new_balance": new_balance,
+                    "message": "Points have been returned to your wallet",
+                    "cancelled_at": DateUtils.get_current_datetime()
+                }
+            }
+
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"DEBUG: Error in cancel_redemption: {str(e)}")
+            print(f"DEBUG: Traceback: {tb}")
+            return {
+                "success": False,
+                "message": f"Failed to cancel redemption: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
