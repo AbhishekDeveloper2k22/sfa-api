@@ -53,8 +53,6 @@ class AppUserAuthService(BaseAuthService):
                 {"mobile": employee_id}
             ]
         })
-
-        print("debug user",user)
         
         if user and user.get('user_type') == 5:  # Sales user
             print(f"Found sales user: {user.get('name')} with user_type: {user.get('user_type')}")
