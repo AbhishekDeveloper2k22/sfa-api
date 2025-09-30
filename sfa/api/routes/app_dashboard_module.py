@@ -271,6 +271,7 @@ async def upload_attendance_image(request: Request, current_user: dict = Depends
         form = await request.form()
         attendance_id = form.get("attendance_id")
         image_file = form.get("image")
+        image_type = (form.get("type") or form.get("image_type") or "stop").strip().lower()
         
         # Validate required fields
         if not attendance_id:
@@ -295,6 +296,20 @@ async def upload_attendance_image(request: Request, current_user: dict = Depends
                     "error": {
                         "code": "VALIDATION_ERROR",
                         "details": "image file is required"
+                    }
+                }
+            )
+
+        # Validate image type
+        if image_type not in ["start", "stop"]:
+            return format_response(
+                success=False,
+                msg="Invalid type",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "type must be 'start' or 'stop'"
                     }
                 }
             )
@@ -363,11 +378,18 @@ async def upload_attendance_image(request: Request, current_user: dict = Depends
         
         user_id = current_user.get("user_id")
         service = AppDashboardService()
-        result = service.upload_attendance_image(
-            user_id=user_id,
-            attendance_id=attendance_id,
-            image_file=image_file
-        )
+        if image_type == "start":
+            result = service.upload_start_attendance_image(
+                user_id=user_id,
+                attendance_id=attendance_id,
+                image_file=image_file
+            )
+        else:
+            result = service.upload_attendance_image(
+                user_id=user_id,
+                attendance_id=attendance_id,
+                image_file=image_file
+            )
         
         if not result.get("success"):
             return format_response(
@@ -379,7 +401,7 @@ async def upload_attendance_image(request: Request, current_user: dict = Depends
         
         return format_response(
             success=True,
-            msg="Attendance image uploaded successfully",
+            msg="Start attendance image uploaded successfully" if image_type == "start" else "Attendance image uploaded successfully",
             statuscode=200,
             data=result.get("data", {})
         )
