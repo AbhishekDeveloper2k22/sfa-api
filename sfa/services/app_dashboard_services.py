@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from bson import ObjectId
 import pytz
 import math
+from sfa.utils.date_utils import build_audit_fields
+
 
 load_dotenv()
 
@@ -305,11 +307,12 @@ class AppDashboardService:
                 }
 
             # Create attendance record
+            
+            punch_in_fields = build_audit_fields(prefix="punch_in", by=user_id, timezone="Asia/Kolkata")
             attendance_data = {
                 "user_id": user_id,
                 "employee_id": user_id,
-                "date": punch_date,
-                "punch_in_time": punch_datetime.isoformat(),
+                **punch_in_fields,
                 "punch_in_latitude": location.get("latitude") if location else None,
                 "punch_in_longitude": location.get("longitude") if location else None,
                 "punch_in_accuracy": location.get("accuracy") if location else None,
@@ -317,8 +320,6 @@ class AppDashboardService:
                 "punch_in_notes": "",
                 "punch_in_timestamp": punch_datetime.timestamp(),
                 "status": "in",
-                "created_at": datetime.now(self.timezone).isoformat(),
-                "updated_at": datetime.now(self.timezone).isoformat()
             }
 
             result = self.attendance_collection.insert_one(attendance_data)
@@ -429,8 +430,11 @@ class AppDashboardService:
             working_hours = (punch_out_datetime - punch_in_time).total_seconds() / 3600
 
             # Update attendance record with punch out
+            
+            updated_fields = build_audit_fields(prefix="updated", by=user_id, timezone="Asia/Kolkata")
+            punch_out_fields = build_audit_fields(prefix="punch_out", by=user_id, timezone="Asia/Kolkata")
             update_data = {
-                "punch_out_time": punch_out_datetime.isoformat(),
+                **punch_out_fields,
                 "punch_out_latitude": location.get("latitude") if location else None,
                 "punch_out_longitude": location.get("longitude") if location else None,
                 "punch_out_accuracy": location.get("accuracy") if location else None,
@@ -438,7 +442,8 @@ class AppDashboardService:
                 "punch_out_timestamp": punch_out_datetime.timestamp(),
                 "working_hours": round(working_hours, 2),
                 "status": "completed",
-                "updated_at": datetime.now(self.timezone).isoformat()
+                "updated_at": datetime.now(self.timezone).isoformat(),
+                **updated_fields
             }
 
             result = self.attendance_collection.update_one(
@@ -890,11 +895,14 @@ class AppDashboardService:
 
             # Initialize response data
             attendance_data = {
-                "date": today,
+                "punch_in_at": None,
+                "punch_in_time": None,
+                "punch_in_by": None,
+                "punch_out_at": None,
+                "punch_out_time": None,
+                "punch_out_by": None,
                 "status": "not_started",
                 "attendance_id": None,
-                "punch_in_time": None,
-                "punch_out_time": None,
                 "working_hours": "00:00",
                 "kms": "0",
                 "punch_in_location": None,
