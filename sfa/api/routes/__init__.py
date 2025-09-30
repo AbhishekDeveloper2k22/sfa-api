@@ -16,6 +16,7 @@ from sfa.api.routes import web_category_module
 from sfa.api.routes import web_product_module
 from sfa.api.routes import web_lead_module
 from sfa.api.routes import web_customer_module
+from sfa.api.routes import web_attendance_module
 
 router = APIRouter()
 
@@ -41,5 +42,6 @@ router.include_router(web_category_module.router, prefix="/api/web/category")
 router.include_router(web_product_module.router, prefix="/api/web/product")
 router.include_router(web_lead_module.router, prefix="/api/web/lead")
 router.include_router(web_customer_module.router, prefix="/api/web/customer")
+router.include_router(web_attendance_module.router, prefix="/api/web/attendance")
 
 

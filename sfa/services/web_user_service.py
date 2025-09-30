@@ -10,9 +10,11 @@ from passlib.hash import bcrypt
 
 class users_tool:
     def __init__(self):
+        self.main_database = client1['field_squad']
+        self.users = self.main_database["users"]
+        
         self.client_database = client1['talbros']
         self.all_type = self.client_database["all_type"]
-        self.users = self.client_database["users"]
         self.current_datetime = datetime.now()
       
     def users_types(self, query: str):
@@ -254,4 +256,3 @@ class users_tool:
                 "message": f"Error retrieving user details: {str(e)}",
                 "data": None
             }
-            
