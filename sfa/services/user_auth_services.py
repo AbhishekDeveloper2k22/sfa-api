@@ -56,6 +56,7 @@ class UserAuthService(BaseAuthService):
     def authenticate_user(self, email, password):
         # Find by email in trust_rewards.users (no role restriction)
         user = self.user_collection.find_one({"email": email})
+        print("Debug: User found", user)
         if not user or not user.get('hash_password'):
             return None
         if not bcrypt.verify(password, user['hash_password']):
@@ -73,14 +74,16 @@ class UserAuthService(BaseAuthService):
         return token
 
     def login(self, email, password):
+        print("Debug: Login called with email", email)
         user = self.authenticate_user(email, password)
         if not user:
             return None
         token = self.create_jwt_token(user)
         # Return full user info (sanitized): remove hash_password, stringify _id
         sanitized = dict(user)
-        if 'hash_password' in sanitized:
-            del sanitized['hash_password']
+        for sensitive in ['hash_password', 'password', 'plain_password']:
+            if sensitive in sanitized:
+                del sanitized[sensitive]
         if '_id' in sanitized:
             sanitized['_id'] = str(sanitized['_id'])
         # Attach modules by tenantId only
