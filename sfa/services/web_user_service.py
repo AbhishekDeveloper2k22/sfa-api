@@ -254,3 +254,4 @@ class users_tool:
                 "message": f"Error retrieving user details: {str(e)}",
                 "data": None
             }
+            
