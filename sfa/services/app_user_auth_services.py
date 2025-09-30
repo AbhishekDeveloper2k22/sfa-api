@@ -109,7 +109,7 @@ class AppUserAuthService(BaseAuthService):
             return payload
         except jwt.ExpiredSignatureError:
             return None
-        except jwt.JWTError:
+        except jwt.InvalidTokenError:
             return None
 
     def login(self, employee_id, password, device_info=None, remember_me=False):
