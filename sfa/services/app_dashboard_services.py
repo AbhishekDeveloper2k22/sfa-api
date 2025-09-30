@@ -533,7 +533,7 @@ class AppDashboardService:
 
             # Create upload directory if it doesn't exist
             import os
-            upload_dir = "uploads/sfa_uploads/attendance"
+            upload_dir = "uploads/sfa_uploads/talbros/attendance"
             os.makedirs(upload_dir, exist_ok=True)
 
             # Generate unique filename
