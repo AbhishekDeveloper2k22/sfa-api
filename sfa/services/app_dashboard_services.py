@@ -294,9 +294,11 @@ class AppDashboardService:
             # Check if already punched in for the given date
             existing_attendance = self.attendance_collection.find_one({
                 "user_id": user_id,
-                "date": punch_date,
+                "punch_in_at": punch_date,
                 "punch_in_time": {"$exists": True},
-                "punch_out_time": {"$exists": False}
+                "punch_in_by": {"$exists": True},
+                "punch_out_time": {"$exists": False},
+                "punch_out_by": {"$exists": False}
             })
 
             if existing_attendance:
@@ -386,16 +388,20 @@ class AppDashboardService:
                 "_id": attendance_object_id,
                 "user_id": user_id,
                 "punch_in_time": {"$exists": True},
-                "punch_out_time": {"$exists": False}
+                "punch_in_by": {"$exists": True},
+                "punch_out_time": {"$exists": False},
+                "punch_out_by": {"$exists": False}
             })
 
             if not existing_attendance:
                 # Check if user has already punched out today
                 completed_attendance = self.attendance_collection.find_one({
                     "user_id": user_id,
-                    "date": datetime.now(self.timezone).strftime("%Y-%m-%d"),
+                    "punch_in_at": datetime.now(self.timezone).strftime("%Y-%m-%d"),
+                    "punch_in_by": {"$exists": True},
                     "punch_in_time": {"$exists": True},
-                    "punch_out_time": {"$exists": True}
+                    "punch_out_time": {"$exists": True},
+                    "punch_out_by": {"$exists": True}
                 })
                 
                 if completed_attendance:

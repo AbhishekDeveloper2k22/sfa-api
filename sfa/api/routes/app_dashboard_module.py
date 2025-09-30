@@ -8,36 +8,7 @@ from datetime import datetime, timedelta
 router = APIRouter()
 
 # JWT Configuration
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-SECRET_KEY = os.getenv('JWT_SECRET')
-ALGORITHM = "HS256"
-
-def verify_token(token: str):
-    """Verify JWT token"""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.JWTError:
-        return None
-
-async def get_current_user(request: Request):
-    """Get current authenticated user"""
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    
-    token = auth_header.split(" ")[1]
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    return payload
+from sfa.utils.auth_utils import get_current_user
 
 def validate_location(location: dict):
     """Validate location data"""
