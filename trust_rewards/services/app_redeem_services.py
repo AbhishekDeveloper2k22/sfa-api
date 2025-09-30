@@ -2,6 +2,8 @@ from datetime import datetime
 from bson import ObjectId
 from trust_rewards.database import client1
 from trust_rewards.utils.common import DateUtils, ValidationUtils, AuditUtils
+from trust_rewards.utils.activity import RecentActivityLogger
+from trust_rewards.utils.transaction import TransactionLogger
 import random
 import string
 
@@ -228,17 +230,35 @@ class AppRedeemService:
             self.gift_redemptions.insert_one(redemption_data)
 
             # Record transaction in ledger (points already deducted)
-            self._record_transaction(
+            TransactionLogger.record(
                 worker_id=worker_id,
                 transaction_type="GIFT_REDEMPTION_REQUEST",
-                amount=-int(points_required),  # Negative for debit, ensure integer
+                amount=-int(points_required),
                 description=f"Gift redemption request: {gift_name}",
-                previous_balance=int(current_balance),  # Ensure integer
-                new_balance=int(new_balance),  # Ensure integer
+                previous_balance=int(current_balance),
+                new_balance=int(new_balance),
                 reference_id=str(gift['_id']),
                 reference_type="gift_master",
-                redemption_id=redemption_data['redemption_id']
+                redemption_id=redemption_data['redemption_id'],
+                created_by=worker_id
             )
+
+            # Log recent activity for redemption request (non-blocking)
+            try:
+                RecentActivityLogger.log_activity(
+                    worker_id=worker_id,
+                    title=f"Redeemed {int(points_required)} points for {gift_name}",
+                    points_change=-int(points_required),
+                    activity_type="GIFT_REDEMPTION_REQUEST",
+                    description=f"Redemption request created for {gift_name}",
+                    reference_id=str(gift['_id']),
+                    reference_type="gift_master",
+                    metadata={
+                        "redemption_id": redemption_data['redemption_id']
+                    }
+                )
+            except Exception as _e:
+                print(f"Activity log failed (redeem request): {_e}")
 
             return {
                 "success": True,
@@ -377,34 +397,7 @@ class AppRedeemService:
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
-    def _record_transaction(self, worker_id: str, transaction_type: str, amount: int, 
-                          description: str, previous_balance: int, new_balance: int,
-                          reference_id: str = None, reference_type: str = None, 
-                          redemption_id: str = None) -> None:
-        """Record transaction in ledger"""
-        try:
-            transaction_data = {
-                "transaction_id": f"TXN_{ObjectId()}",
-                "worker_id": worker_id,
-                "transaction_type": transaction_type,  # GIFT_REDEMPTION, etc.
-                "amount": amount,  # Negative for debit
-                "description": description,
-                "reference_id": reference_id,  # ID of the related document
-                "reference_type": reference_type,  # gift_master, etc.
-                "redemption_id": redemption_id,
-                "previous_balance": previous_balance,
-                "new_balance": new_balance,
-                "transaction_date": DateUtils.get_current_date(),
-                "transaction_time": DateUtils.get_current_time(),
-                "transaction_datetime": DateUtils.get_current_datetime(),
-                "status": "completed",
-                **AuditUtils.build_create_meta(worker_id)  # Using worker ID for app transactions
-            }
-
-            self.transaction_ledger.insert_one(transaction_data)
-            
-        except Exception as e:
-            print(f"Error recording transaction: {str(e)}")
+    # _record_transaction removed; using TransactionLogger.record
 
     def _get_worker_balance(self, worker_id: str) -> int:
         """Get current wallet balance of worker"""
@@ -720,17 +713,33 @@ class AppRedeemService:
             )
 
             # Record transaction in ledger for points return
-            self._record_transaction(
+            TransactionLogger.record(
                 worker_id=worker_id,
                 transaction_type="REDEMPTION_CANCELLATION",
-                amount=points_to_return,  # Positive for credit
+                amount=int(points_to_return),
                 description=f"Redemption cancellation: {redemption.get('gift_name', 'Unknown Gift')}",
                 previous_balance=current_balance,
                 new_balance=new_balance,
                 reference_id=redemption.get('gift_id'),
                 reference_type="gift_master",
-                redemption_id=redemption_id
+                redemption_id=redemption_id,
+                created_by=worker_id
             )
+
+            # Log recent activity for cancellation (credit back)
+            try:
+                RecentActivityLogger.log_activity(
+                    worker_id=worker_id,
+                    title=f"Redemption cancelled for {redemption.get('gift_name', 'Gift')}",
+                    points_change=int(points_to_return),
+                    activity_type="REDEMPTION_CANCELLED",
+                    description="Points returned to wallet due to cancellation",
+                    reference_id=redemption.get('gift_id'),
+                    reference_type="gift_master",
+                    metadata={"redemption_id": redemption_id}
+                )
+            except Exception as _e:
+                print(f"Activity log failed (redeem cancel): {_e}")
 
             return {
                 "success": True,

@@ -2,6 +2,8 @@ from datetime import datetime
 from bson import ObjectId
 from trust_rewards.database import client1
 from trust_rewards.utils.common import DateUtils, ValidationUtils
+from trust_rewards.utils.transaction import TransactionLogger
+from trust_rewards.utils.activity import RecentActivityLogger
 
 class AppCouponService:
     def __init__(self):
@@ -91,7 +93,7 @@ class AppCouponService:
                     
                     # Record individual transaction for this coupon
                     new_balance = current_balance + points_earned
-                    self._record_transaction(
+                    TransactionLogger.record(
                         worker_id=worker_id,
                         transaction_type="COUPON_SCAN",
                         amount=points_earned,
@@ -100,11 +102,30 @@ class AppCouponService:
                         new_balance=new_balance,
                         reference_id=coupon_result.get('coupon_id', ''),
                         reference_type="coupon_code",
-                        batch_number=coupon_result.get('batch_number', '')
+                        batch_number=coupon_result.get('batch_number', ''),
+                        created_by=worker_id
                     )
                     
                     # Update current balance for next transaction
                     current_balance = new_balance
+
+                    # Log recent activity for this successful scan (non-blocking)
+                    try:
+                        RecentActivityLogger.log_activity(
+                            worker_id=worker_id,
+                            title=f"Scanned coupon for {coupon_result.get('batch_number', 'coupon')}",
+                            points_change=points_earned,
+                            activity_type="COUPON_SCAN",
+                            description=f"Scanned coupon: {coupon_code}",
+                            reference_id=coupon_result.get('coupon_id', ''),
+                            reference_type="coupon_code",
+                            metadata={
+                                "coupon_code": coupon_code,
+                                "batch_number": coupon_result.get('batch_number', '')
+                            }
+                        )
+                    except Exception as _e:
+                        print(f"Activity log failed (coupon scan): {_e}")
                 else:
                     failed_scans += 1
 
@@ -248,34 +269,7 @@ class AppCouponService:
                 "points_earned": 0
             }
 
-    def _record_transaction(self, worker_id: str, transaction_type: str, amount: int, 
-                          description: str, previous_balance: int, new_balance: int,
-                          reference_id: str = None, reference_type: str = None, 
-                          batch_number: str = None) -> None:
-        """Record transaction in ledger"""
-        try:
-            transaction_data = {
-                "transaction_id": f"TXN_{ObjectId()}",
-                "worker_id": worker_id,
-                "transaction_type": transaction_type,  # COUPON_SCAN, POINTS_DEDUCTION, etc.
-                "amount": amount,  # Positive for credit, negative for debit
-                "description": description,
-                "reference_id": reference_id,  # ID of the related document
-                "reference_type": reference_type,  # coupon_code, order, etc.
-                "batch_number": batch_number,
-                "previous_balance": previous_balance,
-                "new_balance": new_balance,
-                "transaction_date": DateUtils.get_current_date(),
-                "transaction_time": DateUtils.get_current_time(),
-                "transaction_datetime": DateUtils.get_current_datetime(),
-                "status": "completed",
-                "created_at": DateUtils.get_current_datetime()
-            }
-
-            self.transaction_ledger.insert_one(transaction_data)
-            
-        except Exception as e:
-            print(f"Error recording transaction: {str(e)}")
+    # _record_transaction removed; use TransactionLogger.record instead
 
     def _get_worker_balance(self, worker_id: str) -> int:
         """Get current wallet balance of worker"""

@@ -132,3 +132,48 @@ async def get_redemption_detail(request: Request, current_user: dict = Depends(g
                 }
             }
         )
+
+@router.post("/redeem_request_status_change")
+async def change_redemption_status(request: Request, current_user: dict = Depends(get_current_user)):
+    """Change redemption request status with proper point management"""
+    try:
+        try:
+            request_data = await request.json()
+        except:
+            request_data = {}
+        
+        # Add admin_id from current_user
+        request_data['admin_id'] = str(current_user.get('_id', ''))
+        
+        service = WebRedeemRequestService()
+        result = service.change_redemption_status(request_data)
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to change redemption status"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg=result.get("message", "Redemption status changed successfully"),
+            statuscode=200,
+            data=result.get("data", {})
+        )
+        
+    except Exception as e:
+        tb = traceback.format_exc()
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": str(e),
+                    "traceback": tb
+                }
+            }
+        )
