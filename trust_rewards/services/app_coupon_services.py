@@ -2,6 +2,8 @@ from datetime import datetime
 from bson import ObjectId
 from trust_rewards.database import client1
 from trust_rewards.utils.common import DateUtils, ValidationUtils
+from trust_rewards.utils.transaction import TransactionLogger
+from trust_rewards.utils.activity import RecentActivityLogger
 
 class AppCouponService:
     def __init__(self):
@@ -59,11 +61,12 @@ class AppCouponService:
                     "error": {"code": "ACCOUNT_INACTIVE", "details": "Worker account is not active"}
                 }
 
-            # Process each coupon
+            # Process each coupon and create individual transactions
             results = []
             total_points_earned = 0
             successful_scans = 0
             failed_scans = 0
+            current_balance = self._get_worker_balance(worker_id)
 
             for coupon_code in coupon_codes:
                 coupon_result = self._process_single_coupon(coupon_code, worker)
@@ -71,42 +74,60 @@ class AppCouponService:
                 
                 if coupon_result['success']:
                     successful_scans += 1
-                    total_points_earned += coupon_result.get('points_earned', 0)
+                    points_earned = coupon_result.get('points_earned', 0)
+                    total_points_earned += points_earned
+                    
+                    # Update worker's wallet points for this single coupon
+                    self.skilled_workers.update_one(
+                        {"_id": ObjectId(worker_id)},
+                        {
+                            "$inc": {
+                                "wallet_points": points_earned,
+                                "coupons_scanned": 1
+                            },
+                            "$set": {
+                                "last_activity": DateUtils.get_current_date()
+                            }
+                        }
+                    )
+                    
+                    # Record individual transaction for this coupon
+                    new_balance = current_balance + points_earned
+                    TransactionLogger.record(
+                        worker_id=worker_id,
+                        transaction_type="COUPON_SCAN",
+                        amount=points_earned,
+                        description=f"Scanned coupon: {coupon_code}",
+                        previous_balance=current_balance,
+                        new_balance=new_balance,
+                        reference_id=coupon_result.get('coupon_id', ''),
+                        reference_type="coupon_code",
+                        batch_number=coupon_result.get('batch_number', ''),
+                        created_by=worker_id
+                    )
+                    
+                    # Update current balance for next transaction
+                    current_balance = new_balance
+
+                    # Log recent activity for this successful scan (non-blocking)
+                    try:
+                        RecentActivityLogger.log_activity(
+                            worker_id=worker_id,
+                            title=f"Scanned coupon for {coupon_result.get('batch_number', 'coupon')}",
+                            points_change=points_earned,
+                            activity_type="COUPON_SCAN",
+                            description=f"Scanned coupon: {coupon_code}",
+                            reference_id=coupon_result.get('coupon_id', ''),
+                            reference_type="coupon_code",
+                            metadata={
+                                "coupon_code": coupon_code,
+                                "batch_number": coupon_result.get('batch_number', '')
+                            }
+                        )
+                    except Exception as _e:
+                        print(f"Activity log failed (coupon scan): {_e}")
                 else:
                     failed_scans += 1
-
-            # Get current balance before updating
-            current_balance = self._get_worker_balance(worker_id)
-            new_balance = current_balance + total_points_earned
-
-            # Update worker's wallet points and coupons scanned count
-            if successful_scans > 0:
-                self.skilled_workers.update_one(
-                    {"_id": ObjectId(worker_id)},
-                    {
-                        "$inc": {
-                            "wallet_points": total_points_earned,
-                            "coupons_scanned": successful_scans
-                        },
-                        "$set": {
-                            "last_activity": DateUtils.get_current_date()
-                        }
-                    }
-                )
-
-            # Record transaction in ledger for successful scans
-            if successful_scans > 0:
-                self._record_transaction(
-                    worker_id=worker_id,
-                    transaction_type="COUPON_SCAN",
-                    amount=total_points_earned,
-                    description=f"Scanned {successful_scans} coupons",
-                    previous_balance=current_balance,
-                    new_balance=new_balance,
-                    reference_id="",  # Multiple coupons, no single reference
-                    reference_type="multiple_coupons",
-                    batch_number=""
-                )
 
             return {
                 "success": True,
@@ -121,7 +142,7 @@ class AppCouponService:
                         "worker_id": str(worker['_id']),
                         "name": worker.get('name', ''),
                         "worker_type": worker.get('worker_type', ''),
-                        "new_wallet_balance": new_balance,
+                        "new_wallet_balance": current_balance,
                         "total_coupons_scanned": worker.get('coupons_scanned', 0) + successful_scans
                     }
                 }
@@ -234,6 +255,7 @@ class AppCouponService:
             return {
                 "success": True,
                 "coupon_code": coupon_code,
+                "coupon_id": str(coupon['_id']),  # Add coupon ID for reference
                 "points_earned": points_earned,
                 "batch_number": coupon_master.get('batch_number', '') if coupon_master else '',
                 "message": "Coupon scanned successfully"
@@ -247,34 +269,7 @@ class AppCouponService:
                 "points_earned": 0
             }
 
-    def _record_transaction(self, worker_id: str, transaction_type: str, amount: int, 
-                          description: str, previous_balance: int, new_balance: int,
-                          reference_id: str = None, reference_type: str = None, 
-                          batch_number: str = None) -> None:
-        """Record transaction in ledger"""
-        try:
-            transaction_data = {
-                "transaction_id": f"TXN_{ObjectId()}",
-                "worker_id": worker_id,
-                "transaction_type": transaction_type,  # COUPON_SCAN, POINTS_DEDUCTION, etc.
-                "amount": amount,  # Positive for credit, negative for debit
-                "description": description,
-                "reference_id": reference_id,  # ID of the related document
-                "reference_type": reference_type,  # coupon_code, order, etc.
-                "batch_number": batch_number,
-                "previous_balance": previous_balance,
-                "new_balance": new_balance,
-                "transaction_date": DateUtils.get_current_date(),
-                "transaction_time": DateUtils.get_current_time(),
-                "transaction_datetime": DateUtils.get_current_datetime(),
-                "status": "completed",
-                "created_at": DateUtils.get_current_datetime()
-            }
-
-            self.transaction_ledger.insert_one(transaction_data)
-            
-        except Exception as e:
-            print(f"Error recording transaction: {str(e)}")
+    # _record_transaction removed; use TransactionLogger.record instead
 
     def _get_worker_balance(self, worker_id: str) -> int:
         """Get current wallet balance of worker"""
@@ -566,5 +561,80 @@ class AppCouponService:
             return {
                 "success": False,
                 "message": f"Failed to get wallet balance: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_coupon_scanned_history(self, request_data: dict, current_user: dict) -> dict:
+        """Get coupon scanned history for the worker"""
+        try:
+            # Get worker information
+            worker_id = current_user.get('worker_id')
+            if not worker_id:
+                return {
+                    "success": False,
+                    "message": "Worker information not found",
+                    "error": {"code": "AUTH_ERROR", "details": "Invalid worker token"}
+                }
+
+            # Extract pagination parameters
+            page = request_data.get('page', 1)
+            limit = request_data.get('limit', 20)
+            skip = (page - 1) * limit
+
+            # Get scan history with pagination (sort first, then paginate)
+            scans = list(
+                self.coupon_scanned_history.find({"worker_id": worker_id})
+                .sort("scanned_at", -1)
+                .skip(skip)
+                .limit(limit)
+            )
+
+            # Get total count
+            total_count = self.coupon_scanned_history.count_documents({"worker_id": worker_id})
+
+            # Convert ObjectId to string and format scans
+            formatted_scans = []
+            for scan in scans:
+                scan['_id'] = str(scan['_id'])
+                formatted_scans.append({
+                    "_id": scan['_id'],
+                    "coupon_id": scan.get('coupon_id', ''),
+                    "coupon_code": scan.get('coupon_code', ''),
+                    "worker_id": scan.get('worker_id', ''),
+                    "worker_name": scan.get('worker_name', ''),
+                    "worker_mobile": scan.get('worker_mobile', ''),
+                    "points_earned": scan.get('points_earned', 0),
+                    "scanned_at": scan.get('scanned_at', ''),
+                    "scanned_date": scan.get('scanned_date', ''),
+                    "scanned_time": scan.get('scanned_time', ''),
+                    "coupon_master_id": scan.get('coupon_master_id', ''),
+                    "batch_number": scan.get('batch_number', '')
+                })
+
+            # Calculate pagination info
+            total_pages = (total_count + limit - 1) // limit
+            has_next = page < total_pages
+            has_prev = page > 1
+
+            return {
+                "success": True,
+                "message": "Coupon scanned history retrieved successfully",
+                "data": {
+                    "records": formatted_scans,
+                    "pagination": {
+                        "current_page": page,
+                        "total_pages": total_pages,
+                        "total_count": total_count,
+                        "limit": limit,
+                        "has_next": has_next,
+                        "has_prev": has_prev
+                    }
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get coupon scanned history: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }

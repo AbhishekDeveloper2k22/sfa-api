@@ -14,8 +14,11 @@ class AppDashboardService:
         self.client_database = client1['talbros']
         self.attendance_collection = self.client_database['attendance']
         self.employee_collection = self.client_database['employee_master']
-        self.users_collection = self.client_database['users']
         self.address_cache_collection = self.client_database['address_cache']  # New collection for caching
+
+        self.field_squad_client_database = client1['field_squad']
+        self.users_collection = self.field_squad_client_database['users']
+
         self.timezone = pytz.timezone('Asia/Kolkata')  # Default to IST
         
         # Office location (configurable)
@@ -477,6 +480,16 @@ class AppDashboardService:
 
     def upload_attendance_image(self, user_id, attendance_id, image_file):
         """Upload attendance image for a specific attendance record"""
+        return self._upload_attendance_image_common(user_id, attendance_id, image_file, image_type="stop")
+
+    def upload_start_attendance_image(self, user_id, attendance_id, image_file):
+        """Upload start attendance image for a specific attendance record (punch-in image)."""
+        return self._upload_attendance_image_common(user_id, attendance_id, image_file, image_type="start")
+
+    def _upload_attendance_image_common(self, user_id, attendance_id, image_file, image_type="stop"):
+        """Common helper to upload attendance images.
+        image_type: "start" for punch-in image, "stop" for punch-out image.
+        """
         try:
             # Check if user exists
             user = self.users_collection.find_one({"_id": ObjectId(user_id)})
@@ -520,49 +533,53 @@ class AppDashboardService:
 
             # Create upload directory if it doesn't exist
             import os
-            upload_dir = "uploads/sfa_uploads/attendance"
+            upload_dir = "uploads/sfa_uploads/talbros/attendance"
             os.makedirs(upload_dir, exist_ok=True)
-            print(f"Upload directory created/verified: {upload_dir}")
-            print(f"Directory exists: {os.path.exists(upload_dir)}")
 
             # Generate unique filename
             import uuid
             file_extension = os.path.splitext(image_file.filename)[1].lower()
             unique_filename = f"{uuid.uuid4().hex}{file_extension}"
             file_path = os.path.join(upload_dir, unique_filename)
-            print(f"Generated file path: {file_path}")
-            print(f"Original filename: {image_file.filename}")
-            print(f"File extension: {file_extension}")
-            print(f"Unique filename: {unique_filename}")
 
             # Save image file
             try:
                 # Reset file pointer to beginning
                 image_file.file.seek(0)
-                
+
                 with open(file_path, "wb") as buffer:
                     content = image_file.file.read()
                     buffer.write(content)
-                    
-                print(f"Image saved successfully at: {file_path}")
-                print(f"File size: {len(content)} bytes")
-                
+
             except Exception as e:
-                print(f"Error saving image: {str(e)}")
                 return {
                     "success": False,
                     "message": "Failed to save image file",
                     "error": {"code": "FILE_SAVE_ERROR", "details": f"Could not save image: {str(e)}"}
                 }
 
-            # Update attendance record with image info
-            update_data = {
-                "stop_attendance_image_path": file_path,
-                "stop_attendance_image_filename": unique_filename,
-                "stop_attendance_image_original_name": image_file.filename,
-                "stop_attendance_image_uploaded_at": datetime.now(self.timezone).isoformat(),
-                "updated_at": datetime.now(self.timezone).isoformat()
-            }
+            # Build update fields depending on type
+            now_iso = datetime.now(self.timezone).isoformat()
+            # Normalize path for API response (use forward slashes)
+            normalized_path = file_path.replace("\\", "/")
+            if image_type == "start":
+                update_data = {
+                    "start_attendance_image_path": file_path,
+                    "start_attendance_image_filename": unique_filename,
+                    "start_attendance_image_original_name": image_file.filename,
+                    "start_attendance_image_uploaded_at": now_iso,
+                    "updated_at": now_iso
+                }
+                uploaded_at_key = "start_attendance_image_uploaded_at"
+            else:
+                update_data = {
+                    "stop_attendance_image_path": file_path,
+                    "stop_attendance_image_filename": unique_filename,
+                    "stop_attendance_image_original_name": image_file.filename,
+                    "stop_attendance_image_uploaded_at": now_iso,
+                    "updated_at": now_iso
+                }
+                uploaded_at_key = "stop_attendance_image_uploaded_at"
 
             result = self.attendance_collection.update_one(
                 {"_id": attendance_object_id},
@@ -572,13 +589,13 @@ class AppDashboardService:
             if result.modified_count > 0:
                 return {
                     "success": True,
-                    "message": "Attendance image uploaded successfully",
+                    "message": "Attendance image uploaded successfully" if image_type == "stop" else "Start attendance image uploaded successfully",
                     "data": {
                         "attendanceId": str(attendance_object_id),
-                        "imagePath": file_path,
+                        "imagePath": normalized_path,
                         "imageFilename": unique_filename,
                         "originalFilename": image_file.filename,
-                        "uploadedAt": update_data["stop_attendance_image_uploaded_at"]
+                        "uploadedAt": update_data[uploaded_at_key]
                     }
                 }
             else:
@@ -594,7 +611,6 @@ class AppDashboardService:
                 "message": f"Image upload failed: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
-
     def get_dashboard_overview(self, user_id, date=None):
         """Get dashboard overview data for the user"""
         try:

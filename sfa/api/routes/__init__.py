@@ -35,11 +35,11 @@ router.include_router(attendance_module.router, prefix="/api/attendance")
 router.include_router(app_ai_agent_module.router, prefix="/api/app/ai-agent")
 
 #web routes
-router.include_router(web_user_module.router, prefix="/api/web")
-router.include_router(web_user_auth_module.router, prefix="/api/web")
-router.include_router(web_category_module.router, prefix="/api/web")
-router.include_router(web_product_module.router, prefix="/api/web")
-router.include_router(web_lead_module.router, prefix="/api/web")
-router.include_router(web_customer_module.router, prefix="/api/web")
+router.include_router(web_user_module.router, prefix="/api/web/user")
+router.include_router(web_user_auth_module.router, prefix="/api/web/auth")
+router.include_router(web_category_module.router, prefix="/api/web/category")
+router.include_router(web_product_module.router, prefix="/api/web/product")
+router.include_router(web_lead_module.router, prefix="/api/web/lead")
+router.include_router(web_customer_module.router, prefix="/api/web/customer")
 
 
