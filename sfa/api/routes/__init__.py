@@ -18,6 +18,8 @@ from sfa.api.routes import web_lead_module
 from sfa.api.routes import web_customer_module
 from sfa.api.routes import web_attendance_module
 from sfa.api.routes import web_location_module
+from sfa.api.routes import web_beat_plan_module
+from sfa.api.routes import web_followup_module
 
 router = APIRouter()
 
@@ -45,5 +47,7 @@ router.include_router(web_lead_module.router, prefix="/api/web/lead")
 router.include_router(web_customer_module.router, prefix="/api/web/customer")
 router.include_router(web_attendance_module.router, prefix="/api/web/attendance")
 router.include_router(web_location_module.router, prefix="/api/web/location")
+router.include_router(web_beat_plan_module.router, prefix="/api/web/beat_plan")
+router.include_router(web_followup_module.router, prefix="/api/web/followup")
 
 
