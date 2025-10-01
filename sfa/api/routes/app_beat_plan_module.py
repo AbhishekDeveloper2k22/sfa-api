@@ -307,7 +307,7 @@ async def get_beat_plans_by_day(
             }
         )
 
-@router.post("/start-checkin")
+@router.post("/start_checkin")
 async def start_checkin(request: Request, current_user: dict = Depends(get_current_user)):
     """Start a customer check-in if within 100m of customer location."""
     try:
