@@ -24,7 +24,7 @@ class AppBeatPlanService:
         """Get available areas (cities) from assigned customers for beat plan creation"""
         try:
             # Get user info from field_squad.users
-            user = self.users_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,
@@ -38,7 +38,7 @@ class AppBeatPlanService:
                     "$match": {
                         "assign_user_id": user_id,
                         "status": "active",
-                        "del": 0,
+                        "del": {"$ne": 1},
                         "city": {"$ne": "", "$exists": True}
                     }
                 },
@@ -85,7 +85,7 @@ class AppBeatPlanService:
         try:
             # Get user location if not provided
             if user_lat is None or user_lng is None:
-                user = self.users_collection.find_one({"_id": ObjectId(user_id)})
+                user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
                 if user:
                     user_lat = user.get('latitude')
                     user_lng = user.get('longitude')
@@ -108,7 +108,7 @@ class AppBeatPlanService:
                 "assign_user_id": user_id,
                 "city": area_id,  # area_id is actually city name
                 "status": "active",
-                "del": 0
+                "del": {"$ne": 1}
             }).sort("name", 1))
 
             # Convert ObjectId to string and format customer data
@@ -196,7 +196,7 @@ class AppBeatPlanService:
                 "_id": {"$in": [ObjectId(cid) for cid in customer_ids]},
                 "assign_user_id": user_id,
                 "status": "active",
-                "del": 0
+                "del": {"$ne": 1}
             }))
 
             if len(customers) != len(customer_ids):
@@ -288,7 +288,7 @@ class AppBeatPlanService:
         try:
             # Validate customer
             try:
-                customer = self.customers_collection.find_one({"_id": ObjectId(customer_id), "del": 0})
+                customer = self.customers_collection.find_one({"_id": ObjectId(customer_id), "del": {"$ne": 1}})
             except Exception:
                 customer = None
             if not customer:
@@ -298,20 +298,15 @@ class AppBeatPlanService:
                     "error": {"code": "CUSTOMER_NOT_FOUND", "details": "Invalid customer_id"}
                 }
 
-            # Validate customer coordinates
+            # Validate customer coordinates; if missing, set on first-time check-in
             cust_lat = customer.get('latitude')
             cust_lng = customer.get('longitude')
+            first_time_location_saved = False
             try:
-                cust_lat = float(cust_lat) if cust_lat is not None else None
-                cust_lng = float(cust_lng) if cust_lng is not None else None
+                cust_lat = float(cust_lat) if cust_lat not in (None, "") else None
+                cust_lng = float(cust_lng) if cust_lng not in (None, "") else None
             except Exception:
                 cust_lat, cust_lng = None, None
-            if cust_lat is None or cust_lng is None:
-                return {
-                    "success": False,
-                    "message": "Customer location not available",
-                    "error": {"code": "NO_CUSTOMER_LOCATION", "details": "Customer latitude/longitude missing"}
-                }
 
             # Coerce user coordinates
             try:
@@ -324,18 +319,31 @@ class AppBeatPlanService:
                     "error": {"code": "VALIDATION_ERROR", "details": "latitude/longitude must be numbers"}
                 }
 
-            # Distance check
-            from sfa.utils.geo_utils import calculate_distance, format_distance
-            distance_m = calculate_distance(user_lat, user_lng, cust_lat, cust_lng)
-            if distance_m > radius_m:
-                return {
-                    "success": False,
-                    "message": "You are too far from the customer location",
-                    "error": {
-                        "code": "OUT_OF_RADIUS",
-                        "details": f"Required within {radius_m} m, current distance {format_distance(distance_m)}"
+            # Distance check (or first-time save)
+            if cust_lat is None or cust_lng is None:
+                # First time check-in: persist this location to customer
+                self.customers_collection.update_one(
+                    {"_id": ObjectId(customer_id)},
+                    {"$set": {
+                        "latitude": user_lat,
+                        "longitude": user_lng,
+                        "updated_at": datetime.now(self.timezone).isoformat()
+                    }}
+                )
+                cust_lat, cust_lng = user_lat, user_lng
+                distance_m = 0.0
+                first_time_location_saved = True
+            else:
+                distance_m = calculate_distance(user_lat, user_lng, cust_lat, cust_lng)
+                if distance_m > radius_m:
+                    return {
+                        "success": False,
+                        "message": "You are too far from the customer location",
+                        "error": {
+                            "code": "OUT_OF_RADIUS",
+                            "details": f"Required within {radius_m} m, current distance {format_distance(distance_m)}"
+                        }
                     }
-                }
 
             # Plan date (default today)
             now = datetime.now(self.timezone)
@@ -352,19 +360,33 @@ class AppBeatPlanService:
             else:
                 plan_date_str = now.strftime('%Y-%m-%d')
 
-            # Prevent duplicate active check-in for same customer and day
-            existing = self.customer_checkins_collection.find_one({
+            # Prevent any other active check-in for the user on the same day
+            existing_any = self.customer_checkins_collection.find_one({
                 "user_id": user_id,
-                "customer_id": customer_id,
                 "plan_date": plan_date_str,
-                "status": "in"
+                "status": "in",
+                "del": {"$ne": 1}
             })
-            if existing:
-                return {
-                    "success": False,
-                    "message": "Already checked in for this customer today",
-                    "error": {"code": "ALREADY_CHECKED_IN", "details": str(existing.get('_id'))}
-                }
+            if existing_any:
+                # If it's same customer, treat as duplicate for same customer; else block due to active elsewhere
+                if existing_any.get("customer_id") == customer_id:
+                    return {
+                        "success": False,
+                        "message": "Already checked in for this customer today",
+                        "error": {"code": "ALREADY_CHECKED_IN", "details": str(existing_any.get('_id'))}
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": "You already have an active check-in. Please end it before starting a new one.",
+                        "error": {
+                            "code": "ACTIVE_CHECKIN_EXISTS",
+                            "details": {
+                                "active_checkin_id": str(existing_any.get('_id')),
+                                "customer_id": existing_any.get('customer_id')
+                            }
+                        }
+                    }
 
             # Build record with audit fields
             created_fields = build_audit_fields(prefix="created", by=user_id, timezone="Asia/Kolkata")
@@ -394,7 +416,8 @@ class AppBeatPlanService:
                 "data": {
                     "checkin_id": str(ins.inserted_id),
                     "distance": format_distance(distance_m),
-                    "within_radius": True
+                    "within_radius": True,
+                    "first_time_location_saved": first_time_location_saved
                 }
             }
         except Exception as e:
@@ -404,15 +427,27 @@ class AppBeatPlanService:
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
-    def get_beat_plan_list(self, user_id: str, status: str = None, plan_date: str = None, limit: int = 50, 
+    def get_beat_plan_list(self, user_id: str, status: str = None, active_tab: str = "today", limit: int = 50, 
                           user_lat: float = None, user_lng: float = None) -> Dict[str, Any]:
-        """Get beat plans for a user with route optimization"""
+        """Get beat plan list for the UI: returns coverage and flat customers list for the given date."""
         try:
-            query = {"user_id": user_id, "is_active": True}
+            query = {"user_id": user_id, "is_active": True, "del": {"$ne": 1}}
             if status:
                 query["status"] = status
-            if plan_date:
-                query["plan_date"] = plan_date
+            # Coerce location
+            try:
+                user_lat = float(user_lat) if user_lat is not None else None
+                user_lng = float(user_lng) if user_lng is not None else None
+            except Exception:
+                user_lat, user_lng = None, None
+
+            # Date tab filter
+            from datetime import datetime as _dt
+            today_str = _dt.now(self.timezone).strftime('%Y-%m-%d')
+            if active_tab == "today":
+                query["plan_date"] = today_str
+            elif active_tab == "upcoming":
+                query["plan_date"] = {"$gt": today_str}
 
             beat_plans = list(self.beat_plans_collection.find(query)
                             .sort("created_at", -1)
@@ -420,6 +455,7 @@ class AppBeatPlanService:
 
             # Convert ObjectId to string and enhance with route optimization
             enhanced_plans = []
+            all_customers: List[Dict[str, Any]] = []
             for plan in beat_plans:
                 plan['_id'] = str(plan['_id'])
                 
@@ -428,7 +464,7 @@ class AppBeatPlanService:
                 customers = list(self.customers_collection.find({
                     "_id": {"$in": [ObjectId(cid) for cid in customer_ids]},
                     "status": "active",
-                    "del": 0
+                    "del": {"$ne": 1}
                 }))
                 
                 # Format customer data with distance calculation
@@ -438,7 +474,7 @@ class AppBeatPlanService:
                     customer['customer_id'] = str(customer['_id'])
                     customer['name'] = customer.get('name', '')
                     customer['company_name'] = customer.get('company_name', '')
-                    customer['address'] = customer.get('billing_address', '')
+                    customer['address'] = customer.get('billing_address', '') or customer.get('state', '')
                     customer['phone'] = customer.get('mobile') or customer.get('phone', '')
                     customer['email'] = customer.get('email', '')
                     customer['city'] = customer.get('city', '')
@@ -471,6 +507,8 @@ class AppBeatPlanService:
                         customer['distance'] = format_distance(0.0)
                         customer['distance_km'] = 0.0
                     
+                    # UI-specific fields
+                    customer['distance_formatted'] = format_distance(distance_meters if 'distance_meters' in locals() else 0)
                     formatted_customers.append(customer)
                 
                 # Optimize route if user coordinates are available
@@ -494,16 +532,48 @@ class AppBeatPlanService:
                 plan['total_customers'] = len(formatted_customers)
                 
                 enhanced_plans.append(plan)
+                all_customers.extend(optimized_customers)
+            # Compute coverage for the day from check-ins (only for 'today' tab)
+            coverage_completed = 0
+            total_for_day = len(all_customers)
+            coverage_date = today_str if active_tab == "today" else None
+            if coverage_date and total_for_day > 0:
+                # unique customers checked-in for the date
+                checked = self.customer_checkins_collection.find({
+                    "user_id": user_id,
+                    "plan_date": coverage_date,
+                    "status": {"$in": ["in", "out", "completed"]}
+                })
+                checked_ids = {str(doc.get('customer_id')) for doc in checked}
+                coverage_completed = len(checked_ids)
+            percent = round((coverage_completed / total_for_day) * 100) if total_for_day else 0
+
+            # Build UI-shaped response
+            ui_customers = []
+            for cust in all_customers:
+                ui_customers.append({
+                    "id": cust.get('customer_id'),
+                    "name": cust.get('name') or cust.get('company_name'),
+                    "address": cust.get('address') or cust.get('city') or cust.get('state'),
+                    "phone": cust.get('phone', ''),
+                    "distance": cust.get('distance') if 'distance' in cust else cust.get('distance_formatted', '0 m'),
+                    "distance_km": cust.get('distance_km', 0),
+                    "routeOrder": cust.get('route_order')
+                })
 
             return {
                 "success": True,
                 "data": {
-                    "beat_plans": enhanced_plans,
-                    "total": len(enhanced_plans),
+                    "coverage": {
+                        "percent": percent,
+                        "completed": coverage_completed,
+                        "total": total_for_day
+                    },
+                    "customers": ui_customers,
                     "route_optimization_enabled": user_lat is not None and user_lng is not None
                 }
             }
-
+         
         except Exception as e:
             return {
                 "success": False,
@@ -528,7 +598,8 @@ class AppBeatPlanService:
             query = {
                 "user_id": user_id, 
                 "plan_day": day_name,
-                "is_active": True
+                "is_active": True,
+                "del": {"$ne": 1}
             }
             
             beat_plans = list(self.beat_plans_collection.find(query)
@@ -545,7 +616,7 @@ class AppBeatPlanService:
                 customers = list(self.customers_collection.find({
                     "_id": {"$in": [ObjectId(cid) for cid in customer_ids]},
                     "status": "active",
-                    "del": 0
+                    "del": {"$ne": 1}
                 }))
                 
                 # Format customer data with distance calculation

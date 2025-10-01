@@ -182,25 +182,13 @@ async def create_beat_plan(request: Request, current_user: dict = Depends(get_cu
 
 @router.post("/get_beat_plan_list")
 async def get_beat_plan_list(request: Request, current_user: dict = Depends(get_current_user)):
-    """Get beat plans for the current user on a specific date (required), with optional route optimization."""
+    """Get beat plans for the current user based on active_tab (today/upcoming), with required location for route optimization."""
     try:
         body = await request.json()
         user_id = current_user.get("user_id")
 
-        # Required
-        plan_date = body.get("plan_date")
-        if not plan_date:
-            return format_response(
-                success=False,
-                msg="plan_date is required",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "plan_date is required in YYYY-MM-DD format"
-                    }
-                }
-            )
+        # active_tab: today|upcoming (default today)
+        active_tab = body.get("active_tab", "today")
 
         # Required user coordinates for route optimization
         user_lat = body.get("user_lat")
@@ -246,7 +234,7 @@ async def get_beat_plan_list(request: Request, current_user: dict = Depends(get_
             )
 
         service = AppBeatPlanService()
-        result = service.get_beat_plan_list(user_id, status, plan_date, limit, user_lat, user_lng)
+        result = service.get_beat_plan_list(user_id, status=status, active_tab=active_tab, limit=limit, user_lat=user_lat, user_lng=user_lng)
         
         if not result.get("success"):
             return format_response(
