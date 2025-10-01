@@ -896,7 +896,7 @@ class AppDashboardService:
             # Find today's attendance record
             attendance_record = self.attendance_collection.find_one({
                 "user_id": user_id,
-                "date": today
+                "punch_in_at": today
             })
 
             # Initialize response data
