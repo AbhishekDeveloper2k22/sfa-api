@@ -463,7 +463,7 @@ async def get_dashboard_overview(
             }
         )
 
-@router.get("/today-attendance")
+@router.get("/today_attendance")
 async def get_today_attendance(current_user: dict = Depends(get_current_user)):
     """Get today's attendance status for the current user"""
     print("get_today_attendance api called")
