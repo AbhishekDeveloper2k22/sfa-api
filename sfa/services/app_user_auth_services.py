@@ -134,7 +134,8 @@ class AppUserAuthService(BaseAuthService):
             "employee_id": user.get('employee_code', str(user['_id'])),
             "full_name": user.get('name', ''),
             "role": "Sales User",
-            "user_type": user.get('user_type')
+            "user_type": user.get('user_type'),
+            "tenant_id": user.get('tenantId')
         }
         
         # Adjust token expiry based on remember me
