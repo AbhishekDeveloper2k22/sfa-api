@@ -23,6 +23,8 @@ from sfa.api.routes import web_beat_plan_module
 from sfa.api.routes import web_followup_module
 from sfa.api.routes import app_master_module
 from sfa.api.routes import app_customer_module
+from sfa.api.routes import app_order_module
+from sfa.api.routes import app_otp_module
 
 router = APIRouter()
 
@@ -43,6 +45,8 @@ router.include_router(app_ai_agent_module.router, prefix="/api/app/ai_agent")
 router.include_router(app_beat_plan_module.router, prefix="/api/app/beat_plan")
 router.include_router(app_master_module.router, prefix="/api/app/master")
 router.include_router(app_customer_module.router, prefix="/api/app/customer")
+router.include_router(app_order_module.router, prefix="/api/app/order")
+router.include_router(app_otp_module.router, prefix="/api/app/otp")
 
 #web routes
 router.include_router(web_user_module.router, prefix="/api/web/user")
