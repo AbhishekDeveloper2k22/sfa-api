@@ -87,4 +87,7 @@ pip install -r requirements.txt
 
 4️⃣ Run the Application
 uvicorn index:app --reload
+
+# agar aap uvicorn use kar rahe ho:
+uvicorn index:app --host 0.0.0.0 --port 8000 --reload
 ```

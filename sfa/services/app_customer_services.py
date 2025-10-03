@@ -66,11 +66,46 @@ class AppCustomerService:
                 # Collection might not exist or have different structure
                 pass
 
+            # Check checkin status for today
+            from datetime import datetime as _dt
+            today_str = _dt.now().strftime('%Y-%m-%d')
+            checkin_status = "can_start_checkin"  # Default status
+            
+            # First, check if user has any active checkin with ANY customer today
+            any_active_checkin = self.checkins.find_one({
+                "user_id": user_id,
+                "plan_date": today_str,
+                "status": "in",
+                "del": {"$ne": 1}
+            })
+            
+            # Check if there's a checkin record for this specific customer today
+            checkin_record = self.checkins.find_one({
+                "user_id": user_id,
+                "customer_id": str(obj_id),
+                "plan_date": today_str,
+                "del": {"$ne": 1}
+            })
+            
+            if checkin_record:
+                # User has a checkin record for this customer
+                if checkin_record.get("status") == "in":
+                    checkin_status = "can_end_checkin"
+                elif checkin_record.get("status") in ["out", "completed"]:
+                    checkin_status = "completed"
+            elif any_active_checkin:
+                # User has active checkin with another customer
+                checkin_status = "blocked_by_other_checkin"
+            else:
+                # No checkin record for this customer and no active checkin elsewhere
+                checkin_status = "can_start_checkin"
+
             profile = {
                 "id": str(customer["_id"]),
                 "name": customer.get("name", ""),
                 "company_name": customer.get("company_name", ""),
                 "customer_type": customer_type_name,
+                "customer_type_id": customer.get("customer_type"),
                 "status": customer.get("status", "active"),
                 "phone": customer.get("mobile") or customer.get("phone", ""),
                 "address": customer.get("billing_address", ""),
@@ -80,7 +115,8 @@ class AppCustomerService:
                 "country": customer.get("country", ""),
                 "totalSales": total_sales,
                 "totalOrders": total_orders,
-                "totalVisits": total_visits
+                "totalVisits": total_visits,
+                "checkin_status": checkin_status
             }
             return {"success": True, "data": profile}
         except Exception as e:
