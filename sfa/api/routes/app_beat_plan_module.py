@@ -378,3 +378,68 @@ async def start_checkin(request: Request, current_user: dict = Depends(get_curre
             statuscode=500,
             data={"error": {"code": "SERVER_ERROR", "details": "An unexpected error occurred"}}
         )
+
+@router.post("/end_checkin")
+async def end_checkin(request: Request, current_user: dict = Depends(get_current_user)):
+    """End a customer check-in and mark it as completed."""
+    try:
+        body = await request.json()
+        user_id = current_user.get("user_id")
+
+        customer_id = body.get("customer_id")
+        plan_date = body.get("plan_date")
+        notes = body.get("notes")
+        rating = body.get("rating")
+
+        # Validate required fields
+        if not customer_id:
+            return format_response(
+                success=False,
+                msg="Missing required field: customer_id",
+                statuscode=400,
+                data={"error": {"code": "VALIDATION_ERROR", "details": "customer_id is required"}}
+            )
+
+        # Validate rating if provided
+        if rating is not None:
+            try:
+                rating = int(rating)
+                if not (1 <= rating <= 5):
+                    return format_response(
+                        success=False,
+                        msg="Invalid rating",
+                        statuscode=400,
+                        data={"error": {"code": "VALIDATION_ERROR", "details": "rating must be between 1 and 5"}}
+                    )
+            except (ValueError, TypeError):
+                return format_response(
+                    success=False,
+                    msg="Invalid rating format",
+                    statuscode=400,
+                    data={"error": {"code": "VALIDATION_ERROR", "details": "rating must be a number"}}
+                )
+
+        service = AppBeatPlanService()
+        result = service.end_checkin(user_id, customer_id, plan_date, notes, rating)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to end check-in"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+
+        return format_response(
+            success=True,
+            msg="Check-in ended successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={"error": {"code": "SERVER_ERROR", "details": "An unexpected error occurred"}}
+        )

@@ -325,8 +325,8 @@ class AppBeatPlanService:
                 self.customers_collection.update_one(
                     {"_id": ObjectId(customer_id)},
                     {"$set": {
-                        "latitude": user_lat,
-                        "longitude": user_lng,
+                        "latitude": str(user_lat),
+                        "longitude": str(user_lng),
                         "updated_at": datetime.now(self.timezone).isoformat()
                     }}
                 )
@@ -398,13 +398,14 @@ class AppBeatPlanService:
                 "plan_date": plan_date_str,
                 "status": "in",
                 "checkin_time": now.isoformat(),
-                "user_latitude": user_lat,
-                "user_longitude": user_lng,
-                "customer_latitude": cust_lat,
-                "customer_longitude": cust_lng,
+                "user_latitude": str(user_lat),
+                "user_longitude": str(user_lng),
+                "customer_latitude": str(cust_lat),
+                "customer_longitude": str(cust_lng),
                 "distance_m": round(distance_m, 2),
                 "radius_m": radius_m,
                 "beat_plan_id": beat_plan_id,
+                "first_time_location_saved": first_time_location_saved,
                 **created_fields,
                 **updated_fields
             }
@@ -424,6 +425,102 @@ class AppBeatPlanService:
             return {
                 "success": False,
                 "message": f"Start check-in failed: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def end_checkin(self, user_id: str, customer_id: str, plan_date: str = None, 
+                    notes: str = None, rating: int = None) -> Dict[str, Any]:
+        """End a customer check-in and mark it as completed."""
+        try:
+            # Plan date (default today)
+            now = datetime.now(self.timezone)
+            if plan_date:
+                try:
+                    datetime.strptime(plan_date, '%Y-%m-%d')
+                    plan_date_str = plan_date
+                except ValueError:
+                    return {
+                        "success": False,
+                        "message": "Invalid plan_date format. Use YYYY-MM-DD",
+                        "error": {"code": "INVALID_DATE_FORMAT", "details": "plan_date must be YYYY-MM-DD"}
+                    }
+            else:
+                plan_date_str = now.strftime('%Y-%m-%d')
+
+            # Find active check-in for this customer
+            active_checkin = self.customer_checkins_collection.find_one({
+                "user_id": user_id,
+                "customer_id": customer_id,
+                "plan_date": plan_date_str,
+                "status": "in",
+                "del": {"$ne": 1}
+            })
+
+            if not active_checkin:
+                return {
+                    "success": False,
+                    "message": "No active check-in found for this customer",
+                    "error": {"code": "NO_ACTIVE_CHECKIN", "details": "Customer must be checked in first"}
+                }
+
+            # Build update fields with audit
+            updated_fields = build_audit_fields(prefix="updated", by=user_id, timezone="Asia/Kolkata")
+            checkout_fields = build_audit_fields(prefix="checkout", by=user_id, timezone="Asia/Kolkata")
+            
+            update_data = {
+                "status": "out",
+                "checkout_time": now.isoformat(),
+                **updated_fields,
+                **checkout_fields
+            }
+
+            # Add optional fields if provided
+            if notes:
+                update_data["notes"] = notes
+            if rating and 1 <= rating <= 5:
+                update_data["rating"] = rating
+
+            # Update the check-in record
+            result = self.customer_checkins_collection.update_one(
+                {"_id": active_checkin["_id"]},
+                {"$set": update_data}
+            )
+
+            if result.modified_count == 0:
+                return {
+                    "success": False,
+                    "message": "Failed to end check-in",
+                    "error": {"code": "UPDATE_FAILED", "details": "Check-in record could not be updated"}
+                }
+
+            # Calculate visit duration
+            checkin_time = active_checkin.get("checkin_time")
+            duration_minutes = 0
+            if checkin_time:
+                try:
+                    checkin_dt = datetime.fromisoformat(checkin_time.replace('Z', '+00:00'))
+                    duration = now - checkin_dt.replace(tzinfo=None)
+                    duration_minutes = int(duration.total_seconds() / 60)
+                except Exception:
+                    pass
+
+            return {
+                "success": True,
+                "message": "Check-in ended successfully",
+                "data": {
+                    "checkin_id": str(active_checkin["_id"]),
+                    "customer_id": customer_id,
+                    "checkout_time": now.isoformat(),
+                    "duration_minutes": duration_minutes,
+                    "notes": notes,
+                    "rating": rating
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"End check-in failed: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
@@ -472,6 +569,7 @@ class AppBeatPlanService:
                 for customer in customers:
                     customer['_id'] = str(customer['_id'])
                     customer['customer_id'] = str(customer['_id'])
+                    customer['beat_plan_id'] = plan['_id']  # Add beat plan ID
                     customer['name'] = customer.get('name', '')
                     customer['company_name'] = customer.get('company_name', '')
                     customer['address'] = customer.get('billing_address', '') or customer.get('state', '')
@@ -479,8 +577,7 @@ class AppBeatPlanService:
                     customer['email'] = customer.get('email', '')
                     customer['city'] = customer.get('city', '')
                     customer['state'] = customer.get('state', '')
-                    customer['pincode'] = customer.get('pincode', '')
-                    
+                    customer['pincode'] = customer.get('pincode', '')                    
                     # Calculate distance from user to customer
                     customer_lat = customer.get('latitude')
                     customer_lng = customer.get('longitude')
@@ -548,17 +645,37 @@ class AppBeatPlanService:
                 coverage_completed = len(checked_ids)
             percent = round((coverage_completed / total_for_day) * 100) if total_for_day else 0
 
-            # Build UI-shaped response
+            # Build UI-shaped response with checkin status
             ui_customers = []
             for cust in all_customers:
+                customer_id = cust.get('customer_id')
+                
+                # Get checkin status for this customer on the coverage date
+                checkin_status = "pending"  # Default status
+                if coverage_date:
+                    checkin_record = self.customer_checkins_collection.find_one({
+                        "user_id": user_id,
+                        "customer_id": customer_id,
+                        "plan_date": coverage_date,
+                        "del": {"$ne": 1}
+                    })
+                    
+                    if checkin_record:
+                        if checkin_record.get("status") == "in":
+                            checkin_status = "in_progress"
+                        elif checkin_record.get("status") in ["out", "completed"]:
+                            checkin_status = "completed"
+                
                 ui_customers.append({
-                    "id": cust.get('customer_id'),
+                    "id": customer_id,
                     "name": cust.get('name') or cust.get('company_name'),
                     "address": cust.get('address') or cust.get('city') or cust.get('state'),
                     "phone": cust.get('phone', ''),
                     "distance": cust.get('distance') if 'distance' in cust else cust.get('distance_formatted', '0 m'),
                     "distance_km": cust.get('distance_km', 0),
-                    "routeOrder": cust.get('route_order')
+                    "routeOrder": cust.get('route_order'),
+                    "checkin_status": checkin_status,
+                    "type": cust.get('type', '')
                 })
 
             return {
@@ -569,6 +686,7 @@ class AppBeatPlanService:
                         "completed": coverage_completed,
                         "total": total_for_day
                     },
+                    "beat_plan_id": cust.get('beat_plan_id'),
                     "customers": ui_customers,
                     "route_optimization_enabled": user_lat is not None and user_lng is not None
                 }
