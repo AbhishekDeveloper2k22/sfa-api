@@ -11,7 +11,39 @@ router = APIRouter()
 async def get_location_data(request: Request, current_user: dict = Depends(get_current_user)):
     """Get location data based on state, district, or pincode"""
     try:
-        request_data = await request.json()
+        # Get request body
+        body = await request.body()
+        
+        # Check if body is empty
+        if not body:
+            return format_response(
+                success=False,
+                msg="Request body is empty",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "Request body cannot be empty"
+                    }
+                }
+            )
+        
+        # Try to parse JSON
+        try:
+            request_data = await request.json()
+        except Exception as json_error:
+            return format_response(
+                success=False,
+                msg="Invalid JSON format",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "INVALID_JSON",
+                        "details": f"Invalid JSON format: {str(json_error)}"
+                    }
+                }
+            )
+        
         user_id = current_user.get("user_id")
         
         service = AppLocationService()
