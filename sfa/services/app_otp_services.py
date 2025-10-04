@@ -23,7 +23,7 @@ class AppOTPService:
         end = (10 ** digits) - 1
         return str(random.randint(start, end))
 
-    def send_otp(self, target: str, purpose: str, channel: str = "sms", ttl_minutes: int = 5, meta: Optional[Dict[str, Any]] = None, entity_type: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
+    def send_otp(self, target: str, purpose: str, channel: str = "sms", ttl_minutes: int = 5, entity_type: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         try:
             if not target or not purpose:
                 return {"success": False, "message": "target and purpose are required", "error": {"code": "VALIDATION_ERROR"}}
@@ -45,7 +45,6 @@ class AppOTPService:
                 "attempts": 0,
                 **created_fields,
                 "expires_at": expires_at.isoformat(),
-                "meta": meta or {},
                 # Optional linking to any business entity (order, expense, etc.)
                 "entity_type": entity_type,
             }
@@ -62,6 +61,7 @@ class AppOTPService:
                     "target_masked": self._mask_target(target),
                     "expires_at": doc["expires_at"],
                     "entity_type": entity_type,
+                    "otp": otp,
                     # NOTE: Do not return OTP in production APIs. For testing, include if needed.
                 }
             }

@@ -51,7 +51,7 @@ class AppCustomerService:
                 total_orders = self.orders.count_documents({"customer_id": str(obj_id), "del": {"$ne": 1}})
                 agg = self.orders.aggregate([
                     {"$match": {"customer_id": str(obj_id), "del": {"$ne": 1}}},
-                    {"$group": {"_id": None, "sum": {"$sum": "$grand_total"}}}
+                    {"$group": {"_id": None, "sum": {"$sum": "$total_amount"}}}
                 ])
                 for row in agg:
                     total_sales = float(row.get('sum', 0.0))
@@ -113,9 +113,9 @@ class AppCustomerService:
                 "state": customer.get("state", ""),
                 "pincode": customer.get("pincode", ""),
                 "country": customer.get("country", ""),
-                "totalSales": total_sales,
-                "totalOrders": total_orders,
-                "totalVisits": total_visits,
+                "total_sales": total_sales,
+                "total_orders": total_orders,
+                "total_visits": total_visits,
                 "checkin_status": checkin_status
             }
             return {"success": True, "data": profile}
