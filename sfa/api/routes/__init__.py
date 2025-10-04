@@ -25,6 +25,9 @@ from sfa.api.routes import app_master_module
 from sfa.api.routes import app_customer_module
 from sfa.api.routes import app_order_module
 from sfa.api.routes import app_otp_module
+from sfa.api.routes import app_lead_module
+from sfa.api.routes import app_location_module
+from sfa.api.routes import app_common_module
 
 router = APIRouter()
 
@@ -47,6 +50,9 @@ router.include_router(app_master_module.router, prefix="/api/app/master")
 router.include_router(app_customer_module.router, prefix="/api/app/customer")
 router.include_router(app_order_module.router, prefix="/api/app/order")
 router.include_router(app_otp_module.router, prefix="/api/app/otp")
+router.include_router(app_lead_module.router, prefix="/api/app/lead")
+router.include_router(app_location_module.router, prefix="/api/app/location")
+router.include_router(app_common_module.router, prefix="/api/app/common")
 
 #web routes
 router.include_router(web_user_module.router, prefix="/api/web/user")
