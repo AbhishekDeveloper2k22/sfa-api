@@ -44,6 +44,8 @@ async def create_order(request: Request, current_user: dict = Depends(get_curren
 async def list_orders(request: Request, current_user: dict = Depends(get_current_user)):
     try:
         body = await request.json()
+
+        # Optional filters with sensible defaults
         page = int(body.get("page", 1))
         limit = int(body.get("limit", 20))
         status = body.get("status", "all")
@@ -62,11 +64,26 @@ async def list_orders(request: Request, current_user: dict = Depends(get_current
             date_to=date_to,
         )
         if not result.get("success"):
-            return format_response(success=False, msg=result.get("message", "Failed to get orders"), statuscode=400, data={"error": result.get("error", {})})
-        return format_response(success=True, msg="Orders retrieved successfully", statuscode=200, data=result.get("data", {}))
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get orders"),
+                statuscode=400,
+                data={"error": result.get("error", {})},
+            )
+        return format_response(
+            success=True,
+            msg="Orders retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {}),
+        )
     except Exception as e:
         print(traceback.format_exc())
-        return format_response(success=False, msg=f"Internal server error: {str(e)}", statuscode=500, data={"error": {"code": "SERVER_ERROR", "details": str(e)}})
+        return format_response(
+            success=False,
+            msg=f"Internal server error: {str(e)}",
+            statuscode=500,
+            data={"error": {"code": "SERVER_ERROR", "details": str(e)}},
+        )
 
 
 @router.post("/order_detail")
