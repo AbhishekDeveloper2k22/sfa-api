@@ -116,6 +116,48 @@ async def get_skilled_worker_details(request: Request, current_user: dict = Depe
             }
         )
 
+@router.post("/super30_list")
+async def get_super30_list(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get Super 30 workers listing with ranking and summary fields"""
+    try:
+        try:
+            request_data = await request.json()
+        except:
+            request_data = {}
+
+        service = SkilledWorkerService()
+        result = service.get_super30_list(request_data)
+
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get super30 list"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+
+        return format_response(
+            success=True,
+            msg="Super 30 list retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": str(e),
+                    "traceback": tb
+                }
+            }
+        )
+
 @router.post("/transaction_ledger_list")
 async def get_transaction_ledger_list(request: Request, current_user: dict = Depends(get_current_user)):
     """Get paginated list of transaction ledger with optional filters"""

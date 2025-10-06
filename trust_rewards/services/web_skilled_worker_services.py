@@ -9,6 +9,8 @@ class SkilledWorkerService:
         self.client_database = client1['trust_rewards']
         self.skilled_workers = self.client_database["skilled_workers"]
         self.users = self.client_database["users"]
+        self.transaction_ledger = self.client_database["transaction_ledger"]
+        self.gift_redemptions = self.client_database["gift_redemptions"]
         self.current_datetime = datetime.now()
 
     def get_skilled_workers_list(self, request_data: dict) -> dict:
@@ -222,5 +224,170 @@ class SkilledWorkerService:
             return {
                 "success": False,
                 "message": f"Failed to get worker details: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_super30_list(self, request_data: dict) -> dict:
+        """Return top 30 workers with ranking and requested fields.
+
+        Optional request_data:
+          - page, limit (default 1, 30) if frontend wants pagination
+          - sort_by: one of ['points', 'wallet_points', 'coupon_scans', 'redemption_count']
+          - sort_dir: 1 or -1
+        """
+        try:
+            page = int(request_data.get('page', 1) or 1)
+            limit = int(request_data.get('limit', 30) or 30)
+            skip = (page - 1) * limit
+
+            sort_by = request_data.get('sort_by', 'points')
+            sort_dir = int(request_data.get('sort_dir', -1))
+
+            # Compute coupon scans count per worker from transaction_ledger
+            scans_pipeline = [
+                {"$match": {"transaction_type": "COUPON_SCAN"}},
+                {"$group": {"_id": "$worker_id", "coupon_scans": {"$sum": 1}}}
+            ]
+            scans_map = {d['_id']: d.get('coupon_scans', 0) for d in self.transaction_ledger.aggregate(scans_pipeline)}
+
+            # Compute redemption counts per worker (completed)
+            redeem_done_pipeline = [
+                {"$match": {"status": "redeemed"}},
+                {"$group": {"_id": "$worker_id", "redeem_completed": {"$sum": 1}}}
+            ]
+            redeem_done_map = {d['_id']: d.get('redeem_completed', 0) for d in self.gift_redemptions.aggregate(redeem_done_pipeline)}
+
+            # Compute total earned points per worker (sum of positive amounts)
+            earned_pipeline = [
+                {"$group": {
+                    "_id": "$worker_id",
+                    "earned_points": {"$sum": {"$cond": [{"$gt": ["$amount", 0]}, "$amount", 0]}}
+                }}
+            ]
+            earned_map = {d['_id']: int(d.get('earned_points', 0) or 0) for d in self.transaction_ledger.aggregate(earned_pipeline)}
+
+            # Get candidate workers sorted by requested metric
+            mongo_sort_field = {
+                'points': 'points',
+                'wallet_points': 'wallet_points',
+                'coupon_scans': None,  # will sort in Python after enriching
+                'redemption_count': 'redemption_count',
+            }.get(sort_by, 'points')
+
+            # Base query: Active only unless explicitly specified
+            query = request_data.get('filters', {}) or {}
+            if 'status' not in query:
+                query['status'] = 'Active'
+
+            projection = {
+                "_id": 1,
+                "created_by_id": 1,
+                "user_id": 1,
+                "name": 1,
+                "mobile": 1,
+                "points": 1,
+                "wallet_points": 1,
+                "redemption_count": 1,
+                "state": 1,
+                "district": 1,
+                "city": 1,
+                "pincode": 1,
+                "last_activity": 1,
+            }
+
+            if mongo_sort_field:
+                cursor = self.skilled_workers.find(query, projection).sort(mongo_sort_field, sort_dir).limit(limit)
+                workers = list(cursor)
+            else:
+                # need more than limit to sort by scans in python; fetch top 200 by points as a heuristic
+                workers = list(self.skilled_workers.find(query, projection).sort('points', -1).limit(max(limit, 200)))
+
+            # Enrich and shape output
+            created_by_ids = []
+            rows = []
+            for w in workers:
+                wid = str(w.get('_id'))
+                created_by_id = w.get('created_by_id')
+                if created_by_id:
+                    created_by_ids.append(created_by_id)
+
+                row = {
+                    "worker_id": wid,
+                    "created_by_id": created_by_id,
+                    "worker_name": w.get('name', ''),
+                    "mobile": w.get('mobile', ''),
+                    # Points earned till date from ledger (overrides worker doc points)
+                    "points": int(earned_map.get(wid, w.get('points', 0) or 0)),
+                    "wallet_points": int(w.get('wallet_points', 0) or 0),
+                    "coupon_scans": int(scans_map.get(wid, 0)),
+                    "redemption_count": int(w.get('redemption_count', 0) or 0) + int(redeem_done_map.get(wid, 0)),
+                    "state": w.get('state', ''),
+                    "district": w.get('district', ''),
+                    "city": w.get('city', ''),
+                    "pincode": w.get('pincode', ''),
+                    "last_activity": w.get('last_activity', ''),
+                }
+                rows.append(row)
+
+            # If sorting by coupon_scans, do it now
+            if sort_by == 'coupon_scans':
+                rows.sort(key=lambda r: r['coupon_scans'], reverse=(sort_dir == -1))
+
+            # Apply pagination (in case of python sorting)
+            rows = rows[skip: skip + limit]
+
+            # Rank assignment
+            rows.sort(key=lambda r: (
+                -r['points'],
+                -r['wallet_points'],
+                -r['coupon_scans'],
+                -r['redemption_count'],
+            ))
+            for idx, r in enumerate(rows, start=1 + skip):
+                r['rank'] = idx
+
+            # Resolve Created By names
+            if created_by_ids:
+                users_data = list(self.users.find({"user_id": {"$in": list(set(created_by_ids))}}, {"user_id": 1, "username": 1}))
+                name_map = {u.get('user_id'): u.get('username', 'Unknown') for u in users_data}
+                for r in rows:
+                    r['created_by_name'] = name_map.get(r.get('created_by_id'), 'Unknown')
+            else:
+                for r in rows:
+                    r['created_by_name'] = 'Unknown'
+
+            # Final shape for frontend columns
+            listing = []
+            for r in rows:
+                listing.append({
+                    "rank": r['rank'],
+                    "created_by_id": r['created_by_id'],
+                    "created_by_name": r['created_by_name'],
+                    "worker_id": r['worker_id'],
+                    "worker_name": r['worker_name'],
+                    "mobile": r['mobile'],
+                    "points": r['points'],
+                    "wallet_points": r['wallet_points'],
+                    "coupons_scanned": r['coupon_scans'],
+                    "redemption_count": r['redemption_count'],
+                    "state": r['state'],
+                    "district": r['district'],
+                    "city": r['city'],
+                    "pincode": r['pincode'],
+                    "last_activity": r['last_activity'],
+                })
+
+            return {
+                "success": True,
+                "data": {
+                    "records": listing,
+                    "pagination": {"current_page": page, "limit": limit}
+                }
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get super30 list: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
