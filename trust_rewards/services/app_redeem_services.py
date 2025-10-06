@@ -353,7 +353,24 @@ class AppRedeemService:
             }
 
     def get_wallet_balance(self, current_user: dict) -> dict:
-        """Get current wallet balance for worker"""
+        """Get wallet overview for wallet screen.
+
+        Returns:
+            {
+                success: true,
+                data: {
+                    balance: int,
+                    totals: { earned: int, redeemed: int, redeemed_abs: int },
+                    recent_transactions: [
+                        {
+                            transaction_id, transaction_type, description,
+                            amount, is_credit, date_label, transaction_date,
+                            transaction_time
+                        }
+                    ]
+                }
+            }
+        """
         try:
             # Get worker information
             worker_id = current_user.get('worker_id')
@@ -364,30 +381,91 @@ class AppRedeemService:
                     "error": {"code": "AUTH_ERROR", "details": "Invalid user session"}
                 }
 
-            # Get current balance
-            current_balance = self._get_worker_balance(worker_id)
+            # Current balance from worker document
+            balance = self._get_worker_balance(worker_id)
 
-            # Get total redemptions count
-            total_redemptions = self.gift_redemptions.count_documents({"worker_id": worker_id})
-
-            # Get total points spent on redemptions
-            total_points_spent = self.gift_redemptions.aggregate([
+            # Aggregate totals from transaction_ledger
+            pipeline = [
                 {"$match": {"worker_id": worker_id}},
-                {"$group": {"_id": None, "total": {"$sum": "$points_used"}}}
-            ])
+                {
+                    "$group": {
+                        "_id": None,
+                        "earned": {"$sum": {"$cond": [{"$gt": ["$amount", 0]}, "$amount", 0]}},
+                        "redeemed": {"$sum": {"$cond": [{"$lt": ["$amount", 0]}, "$amount", 0]}},
+                    }
+                }
+            ]
 
-            total_spent = 0
-            for result in total_points_spent:
-                total_spent = result.get('total', 0)
-                break
+            agg = list(self.transaction_ledger.aggregate(pipeline))
+            earned_total = 0
+            redeemed_total = 0
+            if agg:
+                earned_total = int(agg[0].get("earned", 0) or 0)
+                redeemed_total = int(agg[0].get("redeemed", 0) or 0)  # negative sum
+
+            # Recent transactions (last 10)
+            recent = list(
+                self.transaction_ledger.find({"worker_id": worker_id})
+                .sort("transaction_datetime", -1)
+                .limit(10)
+            )
+
+            # Build friendly list
+            today = DateUtils.get_current_date()
+            recent_list = []
+            for tx in recent:
+                # Normalize values
+                amount = int(tx.get("amount", 0) or 0)
+                tx_date = tx.get("transaction_date") or today
+
+                # Human friendly date label
+                try:
+                    days = DateUtils.get_days_difference(tx_date, today)
+                except Exception:
+                    days = 0
+                if days <= 0:
+                    date_label = "Today"
+                elif days == 1:
+                    date_label = "Yesterday"
+                else:
+                    date_label = f"{days} days ago"
+
+                recent_list.append({
+                    "transaction_id": tx.get("transaction_id", ""),
+                    "transaction_type": tx.get("transaction_type", ""),
+                    "description": tx.get("description", ""),
+                    "amount": amount,
+                    "is_credit": amount > 0,
+                    "date_label": date_label,
+                    "transaction_date": tx_date,
+                    "transaction_time": tx.get("transaction_time", ""),
+                })
 
             return {
                 "success": True,
                 "data": {
-                    "current_balance": current_balance,
-                    "total_redemptions": total_redemptions,
-                    "total_points_spent": total_spent
-                }
+                    "balance": balance,
+                    "totals": {
+                        "earned": earned_total,
+                        "redeemed": redeemed_total,
+                        "redeemed_abs": abs(redeemed_total),
+                    },
+                    "counts": {
+                        "coupon_scans": int(self.transaction_ledger.count_documents({
+                            "worker_id": worker_id,
+                            "transaction_type": "COUPON_SCAN"
+                        })),
+                        "redeems": int(self.gift_redemptions.count_documents({
+                            "worker_id": worker_id,
+                            "status": "redeemed"
+                        })),
+                        "redeem_pending": int(self.gift_redemptions.count_documents({
+                            "worker_id": worker_id,
+                            "status": "pending"
+                        })),
+                    },
+                    "recent_transactions": recent_list,
+                },
             }
 
         except Exception as e:
@@ -419,6 +497,23 @@ class AppRedeemService:
     def send_otp_for_redemption(self, request_data: dict, current_user: dict) -> dict:
         """Send OTP to worker's mobile for gift redemption verification"""
         try:
+
+            gift_id = request_data.get('gift_id')
+            if not gift_id:
+                return {
+                    "success": False,
+                    "message": "Gift ID is required",
+                    "error": {"code": "VALIDATION_ERROR", "details": "Gift ID is mandatory"}
+                }
+
+            gift = self.gift_master.find_one({"_id": ObjectId(gift_id), "status": "active"})
+            if not gift:
+                return {
+                    "success": False,
+                    "message": "Gift not found or inactive",
+                    "error": {"code": "NOT_FOUND", "details": "Gift not found or inactive"}
+                }
+
             # Get worker information
             worker_id = current_user.get('worker_id')
             if not worker_id:
@@ -452,10 +547,14 @@ class AppRedeemService:
             # OTP expires in 5 minutes
             expiry_time = datetime.now().timestamp() + (5 * 60)  # 5 minutes from now
 
+
+
+
             # Store OTP in database
             otp_data = {
                 "otp_id": f"OTP_{ObjectId()}",
                 "worker_id": worker_id,
+                "gift_id": gift_id,
                 "mobile": mobile,
                 "otp": otp,
                 "purpose": "gift_redemption",

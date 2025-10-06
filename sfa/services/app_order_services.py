@@ -335,23 +335,52 @@ class AppOrderService:
                 else:
                     query["order_date"] = {"$lte": date_to}
 
+            # Tab counts for badges (All/Draft/Pending/Approved/In Progress etc.)
+            status_list = ["draft", "pending", "approved", "in_progress", "rejected", "cancelled"]
+            counts: Dict[str, int] = {s: self.orders_collection.count_documents({**{k: v for k, v in query.items() if k != "status"}, "status": s}) for s in status_list}
+            counts_all = self.orders_collection.count_documents({k: v for k, v in query.items() if k != "status"})
+
             total = self.orders_collection.count_documents(query)
             skip = (page - 1) * limit
             orders = list(self.orders_collection.find(query).sort("created_at", -1).skip(skip).limit(limit))
 
-            def to_dict(doc: Dict[str, Any]) -> Dict[str, Any]:
-                return {
-                    "order_id": str(doc.get("_id")),
-                    "customer_id": doc.get("customer_id"),
-                    "customer_type": doc.get("customer_type"),
+            # Build UI-ready list items
+            data_list: List[Dict[str, Any]] = []
+            for doc in orders:
+                order_id = str(doc.get("_id"))
+                customer_id_val = doc.get("customer_id")
+                customer = None
+                try:
+                    customer = self.customers_collection.find_one({"_id": ObjectId(customer_id_val)})
+                except Exception:
+                    customer = self.customers_collection.find_one({"_id": customer_id_val})
+
+                # Compute item count and total quantity from order_items
+                items: List[Dict[str, Any]] = doc.get("order_items", [])
+                item_count = len(items)
+                total_qty = sum(float(i.get("quantity", 0)) for i in items)
+
+                # Order code like PO-2024-001 or SO-2024-002 based on order_type
+                order_type = (doc.get("order_type") or "Primary").strip()
+                code_prefix = "PO" if order_type.lower() == "primary" else "SO"
+                year_str = str(doc.get("order_date", "")[0:4] or datetime.now(self.timezone).year)
+                short_id = order_id[-3:].upper()
+                order_code = f"{code_prefix}-{year_str}-{short_id}"
+
+                data_list.append({
+                    "order_id": order_id,
+                    "order_code": order_code,
+                    "order_type": order_type,
                     "status": doc.get("status"),
-                    "subtotal": doc.get("subtotal"),
-                    "total_amount": doc.get("total_amount"),
+                    "customer_id": customer_id_val,
+                    "customer_name": (customer or {}).get("company_name") or (customer or {}).get("name"),
+                    "items": int(item_count),
+                    "quantity": float(f"{total_qty:.2f}"),
+                    "amount": float(doc.get("total_amount", 0) or 0),
                     "order_date": doc.get("order_date"),
                     "created_at": doc.get("created_at"),
-                }
+                })
 
-            data_list = [to_dict(o) for o in orders]
             total_pages = (total + limit - 1) // limit
             pagination = {
                 "page": page,
@@ -362,7 +391,14 @@ class AppOrderService:
                 "hasPrev": page > 1
             }
 
-            return {"success": True, "data": {"orders": data_list, "pagination": pagination}}
+            return {
+                "success": True,
+                "data": {
+                    "list": data_list,
+                    "counts": {**counts, "all": counts_all},
+                    "pagination": pagination,
+                }
+            }
         except Exception as e:
             return {"success": False, "message": f"Failed to list orders: {str(e)}", "error": {"code": "SERVER_ERROR", "details": str(e)}}
 
