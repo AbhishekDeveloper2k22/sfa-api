@@ -9,9 +9,7 @@ from .app_user_auth_module import router as app_user_auth_module
 from .app_coupon_module import router as app_coupon_module
 from .app_master_module import router as app_master_module
 from .app_redeem_module import router as app_redeem_module
-
-#web
-
+from .app_worker_module import router as app_worker_module
 
 router = APIRouter()
 
@@ -26,6 +24,9 @@ router.include_router(app_user_auth_module, prefix="/api/app/auth")
 router.include_router(app_coupon_module, prefix="/api/app/coupons")
 router.include_router(app_master_module, prefix="/api/app/master")
 router.include_router(app_redeem_module, prefix="/api/app/redeem")
+router.include_router(app_worker_module, prefix="/api/app/skilled_workers")
+
+
 
 #web routes
 router.include_router(web_user_auth_module, prefix="/api/web/auth")
