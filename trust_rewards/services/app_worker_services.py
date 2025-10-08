@@ -19,7 +19,7 @@ class AppWorkerService:
             "transaction_datetime": {"$gte": start}
         }
 
-    def get_super30_leaderboard(self, request_data: dict) -> dict:
+    def get_super30_leaderboard(self, request_data: dict, current_user: dict = None) -> dict:
         try:
             period = (request_data.get('period') or 'this_month').lower()
             if period not in ['this_month', 'all_time']:
@@ -50,15 +50,24 @@ class AppWorkerService:
 
             # Build podium and rankings list
             records = []
+            current_user_rank = None
+            current_user_in_top30 = False
+            
             for idx, a in enumerate(agg, start=1):
                 wid = a['_id']
-                records.append({
+                record = {
                     "rank": idx,
                     "worker_id": wid,
                     "worker_name": workers_map.get(wid, ""),
                     "points": int(a.get('earned_points', 0) or 0),
                     "scans": int(a.get('scans', 0) or 0),
-                })
+                }
+                records.append(record)
+                
+                # Check if current user is in top 30
+                if current_user and current_user.get('worker_id') == wid:
+                    current_user_rank = idx
+                    current_user_in_top30 = True
 
             top3 = records[:3]
             rankings = records[3:]
@@ -69,6 +78,10 @@ class AppWorkerService:
                     "period": period,
                     "top3": top3,
                     "rankings": rankings,
+                    "current_user": {
+                        "is_in_top30": current_user_in_top30,
+                        "rank": current_user_rank
+                    }
                 }
             }
         except Exception as e:
