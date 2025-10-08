@@ -22,7 +22,7 @@ async def super30_leaderboard(request: Request, current_user: dict = Depends(get
             request_data = {}
 
         service = AppWorkerService()
-        result = service.get_super30_leaderboard(request_data)
+        result = service.get_super30_leaderboard(request_data, current_user)
 
         if not result.get("success"):
             return format_response(
