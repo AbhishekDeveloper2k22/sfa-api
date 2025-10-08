@@ -28,6 +28,7 @@ from sfa.api.routes import app_otp_module
 from sfa.api.routes import app_lead_module
 from sfa.api.routes import app_location_module
 from sfa.api.routes import app_common_module
+from sfa.api.routes import app_leave_module
 
 router = APIRouter()
 
@@ -53,6 +54,7 @@ router.include_router(app_otp_module.router, prefix="/api/app/otp")
 router.include_router(app_lead_module.router, prefix="/api/app/lead")
 router.include_router(app_location_module.router, prefix="/api/app/location")
 router.include_router(app_common_module.router, prefix="/api/app/common")
+router.include_router(app_leave_module.router, prefix="/api/app/leave")
 
 #web routes
 router.include_router(web_user_module.router, prefix="/api/web/user")

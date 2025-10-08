@@ -11,9 +11,10 @@ load_dotenv()
 
 class AppAttendanceService:
     def __init__(self):
-        self.client_database = client1['hrms_master']
+        self.client_database = client1['talbros']
+        self.field_squad_database = client1['field_squad']
         self.attendance_collection = self.client_database['attendance']
-        self.employee_collection = self.client_database['employee_master']
+        self.users_collection = self.field_squad_database['users']
         self.timezone = pytz.timezone('Asia/Kolkata')  # Default to IST
 
     def _format_time(self, time_str):
@@ -61,7 +62,7 @@ class AppAttendanceService:
         """Get attendance list for current month with present/absent status for each date"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,
@@ -107,7 +108,7 @@ class AppAttendanceService:
                         "data": {
                             "month": f"{month} {year}",
                             "attendance": [],
-                            "summary": {"total": 0, "present": 0, "absent": 0, "incomplete": 0, "late": 0, "leave": 0, "wfh": 0, "weekend": 0},
+                            "summary": {"total": 0, "present": 0, "absent": 0, "incomplete": 0, "late": 0, "weekend": 0},
                             "pagination": {"page": page, "limit": limit, "total": 0, "totalPages": 0, "hasNext": False, "hasPrev": False},
                             "totalDays": 0
                         }
@@ -161,8 +162,6 @@ class AppAttendanceService:
             present_count = 0
             absent_count = 0
             late_count = 0
-            leave_count = 0
-            wfh_count = 0
             incomplete_count = 0
             weekend_count = 0
             
@@ -194,17 +193,6 @@ class AppAttendanceService:
                                 present_count += 1
                         except:
                             present_count += 1
-                            
-                        # Check for leave or WFH from notes or additional fields
-                        notes = record.get("punch_in_notes", "") or record.get("punch_out_notes", "")
-                        if "leave" in notes.lower() or "leave" in record.get("status", "").lower():
-                            status_value = "leave"
-                            leave_count += 1
-                            present_count -= 1  # Adjust counts
-                        elif "wfh" in notes.lower() or "work from home" in notes.lower() or "wfh" in record.get("status", "").lower():
-                            status_value = "wfh"
-                            wfh_count += 1
-                            present_count -= 1  # Adjust counts
                             
                     else:
                         # Only punch in, not complete
@@ -263,8 +251,6 @@ class AppAttendanceService:
             filtered_absent = sum(1 for item in attendance_list if item["status"] == "absent")
             filtered_incomplete = sum(1 for item in attendance_list if item["status"] == "incomplete")
             filtered_late = sum(1 for item in attendance_list if item["status"] == "late")
-            filtered_leave = sum(1 for item in attendance_list if item["status"] == "leave")
-            filtered_wfh = sum(1 for item in attendance_list if item["status"] == "wfh")
             filtered_weekend = sum(1 for item in attendance_list if item["status"] == "weekend")
             
             summary = {
@@ -273,8 +259,6 @@ class AppAttendanceService:
                 "absent": filtered_absent,
                 "incomplete": filtered_incomplete,
                 "late": filtered_late,
-                "leave": filtered_leave,
-                "wfh": filtered_wfh,
                 "weekend": filtered_weekend
             }
             

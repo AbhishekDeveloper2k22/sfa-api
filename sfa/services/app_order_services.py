@@ -5,6 +5,7 @@ from bson import ObjectId
 import pytz
 
 from sfa.utils.date_utils import build_audit_fields
+from sfa.utils.code_generator import generate_order_code
 from sfa.services.app_otp_services import AppOTPService
 
 
@@ -301,11 +302,25 @@ class AppOrderService:
                     "error": {"code": "DATABASE_ERROR", "details": "Insert failed"},
                 }
 
+            # Generate unique order code and update the document
+            order_id_str = str(result.inserted_id)
+            order_code = generate_order_code(
+                order_type=order_doc["order_type"],
+                order_date=order_doc["order_date"]
+            )
+            
+            # Update order with order_code
+            self.orders_collection.update_one(
+                {"_id": result.inserted_id},
+                {"$set": {"order_code": order_code}}
+            )
+
             return {
                 "success": True,
                 "message": "Order created successfully",
                 "data": {
-                    "order_id": str(result.inserted_id),
+                    "order_id": order_id_str,
+                    "order_code": order_code,
                     "status": order_doc["status"],
                     "subtotal": order_doc["subtotal"],
                     "total_amount": order_doc["total_amount"],
@@ -360,12 +375,14 @@ class AppOrderService:
                 item_count = len(items)
                 total_qty = sum(float(i.get("quantity", 0)) for i in items)
 
-                # Order code like PO-2024-001 or SO-2024-002 based on order_type
+                # Get order code from database or generate if not exists (for backward compatibility)
                 order_type = (doc.get("order_type") or "Primary").strip()
-                code_prefix = "PO" if order_type.lower() == "primary" else "SO"
-                year_str = str(doc.get("order_date", "")[0:4] or datetime.now(self.timezone).year)
-                short_id = order_id[-3:].upper()
-                order_code = f"{code_prefix}-{year_str}-{short_id}"
+                order_code = doc.get("order_code")
+                if not order_code:
+                    order_code = generate_order_code(
+                        order_type=order_type,
+                        order_date=doc.get("order_date", "")
+                    )
 
                 data_list.append({
                     "order_id": order_id,
@@ -414,21 +431,63 @@ class AppOrderService:
             if not doc:
                 return {"success": False, "message": "Order not found", "error": {"code": "NOT_FOUND"}}
 
+            # Get customer details
+            customer_id_val = doc.get("customer_id")
+            customer = None
+            customer_name = ""
+            try:
+                customer = self.customers_collection.find_one({"_id": ObjectId(customer_id_val)})
+            except Exception:
+                customer = self.customers_collection.find_one({"_id": customer_id_val})
+            
+            if customer:
+                customer_name = customer.get("company_name") or customer.get("name") or ""
+
+            # # Get order code from database or generate if not exists (for backward compatibility)
+            order_code = doc.get("order_code")
+            if not order_code:
+                order_type = (doc.get("order_type") or "Primary").strip()
+                order_code = generate_order_code(
+                    order_type=order_type,
+                    order_date=doc.get("order_date", "")
+                )
+
+            # Calculate item count and total quantity
+            items = doc.get("order_items", [])
+            item_count = len(items)
+            total_qty = sum(float(i.get("quantity", 0)) for i in items)
+
+            # Calculate pricing breakdown
+            subtotal = float(doc.get("subtotal", 0) or 0)
+            gst_percentage = 5.0
+            gst_amount = self._round2(subtotal * (gst_percentage / 100.0))
+            grand_total = self._round2(subtotal + gst_amount)
+
             detail = {
                 "order_id": str(doc.get("_id")),
-                "customer_id": doc.get("customer_id"),
+                "order_code": order_code,
+                "customer_id": customer_id_val,
+                "customer_name": customer_name,
                 "customer_type": doc.get("customer_type"),
                 "customer_type_id": doc.get("customer_type_id"),
                 "customer_type_name": doc.get("customer_type_name"),
-                "order_items": doc.get("order_items", []),
-                "subtotal": doc.get("subtotal"),
-                "total_amount": doc.get("total_amount"),
+                "order_items": items,
+                "item_count": item_count,
+                "total_quantity": float(f"{total_qty:.2f}"),
+                "subtotal": subtotal,
+                "gst_percentage": gst_percentage,
+                "gst_amount": gst_amount,
+                "total_amount": subtotal,  # Total before GST
+                "grand_total": grand_total,  # Total after GST
                 "order_date": doc.get("order_date"),
-                "order_type": doc.get("order_type"),
-                "notes": doc.get("notes"),
+                "delivery_date": doc.get("delivery_date", ""),
+                "order_type": order_type,
+                "notes": doc.get("notes", ""),
                 "status": doc.get("status"),
                 "created_at": doc.get("created_at"),
+                "created_time": doc.get("created_time"),
                 "updated_at": doc.get("updated_at"),
+                "updated_time": doc.get("updated_time"),
             }
             return {"success": True, "data": detail}
         except Exception as e:
