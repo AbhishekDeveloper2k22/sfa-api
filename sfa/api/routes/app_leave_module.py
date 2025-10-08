@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException, Depends, Query, UploadFile, File, Form
 from sfa.services.app_leave_services import AppLeaveService
 from sfa.utils.response import format_response
+from sfa.utils.auth_utils import get_current_user
 from typing import Optional
 import jwt
 from datetime import datetime, timedelta
@@ -10,39 +11,7 @@ import uuid
 
 router = APIRouter()
 
-# JWT Configuration
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-SECRET_KEY = os.getenv('JWT_SECRET')
-ALGORITHM = "HS256"
-
-def verify_token(token: str):
-    """Verify JWT token"""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.JWTError:
-        return None
-
-async def get_current_user(request: Request):
-    """Get current authenticated user"""
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    
-    token = auth_header.split(" ")[1]
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    return payload
-
-@router.post("/apply")
+@router.post("/apply_leave")
 async def apply_leave(
     request: Request,
     current_user: dict = Depends(get_current_user)
@@ -54,11 +23,9 @@ async def apply_leave(
         
         # Extract leave application data
         leave_type = body.get("leaveType")
-        start_date = body.get("startDate")
-        end_date = body.get("endDate")
+        from_date = body.get("fromDate")  # From Date
+        to_date = body.get("toDate")      # To Date
         reason = body.get("reason", "")
-        half_day = body.get("halfDay", False)
-        half_day_type = body.get("halfDayType")  # "first_half" or "second_half"
         
         # Validate required fields
         if not leave_type:
@@ -74,36 +41,36 @@ async def apply_leave(
                 }
             )
         
-        if not start_date:
+        if not from_date:
             return format_response(
                 success=False,
-                msg="Start date is required",
+                msg="From date is required",
                 statuscode=400,
                 data={
                     "error": {
                         "code": "VALIDATION_ERROR",
-                        "details": "Start date is required"
+                        "details": "From date is required"
                     }
                 }
             )
         
-        if not end_date:
+        if not to_date:
             return format_response(
                 success=False,
-                msg="End date is required",
+                msg="To date is required",
                 statuscode=400,
                 data={
                     "error": {
                         "code": "VALIDATION_ERROR",
-                        "details": "End date is required"
+                        "details": "To date is required"
                     }
                 }
             )
         
         # Validate date format
         try:
-            datetime.strptime(start_date, "%Y-%m-%d")
-            datetime.strptime(end_date, "%Y-%m-%d")
+            datetime.strptime(from_date, "%Y-%m-%d")
+            datetime.strptime(to_date, "%Y-%m-%d")
         except ValueError:
             return format_response(
                 success=False,
@@ -111,14 +78,13 @@ async def apply_leave(
                 statuscode=400,
                 data={
                     "error": {
-                        "code": "VALIDATION_ERROR",
                         "details": "Date must be in YYYY-MM-DD format"
                     }
                 }
             )
         
         # Validate leave type
-        valid_leave_types = ["casual", "sick", "annual", "maternity", "paternity", "bereavement", "other"]
+        valid_leave_types = ["casual", "sick", "other"]
         if leave_type not in valid_leave_types:
             return format_response(
                 success=False,
@@ -132,29 +98,13 @@ async def apply_leave(
                 }
             )
         
-        # Validate half day parameters
-        if half_day and half_day_type not in ["first_half", "second_half"]:
-            return format_response(
-                success=False,
-                msg="Invalid half day type",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "Half day type must be 'first_half' or 'second_half'"
-                    }
-                }
-            )
-        
         service = AppLeaveService()
         result = service.apply_leave(
             user_id=user_id,
             leave_type=leave_type,
-            start_date=start_date,
-            end_date=end_date,
-            reason=reason,
-            half_day=half_day,
-            half_day_type=half_day_type
+            start_date=from_date,
+            end_date=to_date,
+            reason=reason
         )
         
         if not result.get("success"):
@@ -185,7 +135,7 @@ async def apply_leave(
             }
         )
 
-@router.post("/list")
+@router.post("/leave_list")
 async def get_leave_list(
     request: Request,
     current_user: dict = Depends(get_current_user)
@@ -260,7 +210,7 @@ async def get_leave_list(
         )
 
 # Used
-@router.get("/balance")
+@router.get("/leave_balance")
 async def get_leave_balance(
     current_user: dict = Depends(get_current_user)
 ):
@@ -299,14 +249,29 @@ async def get_leave_balance(
             }
         )
 
-@router.get("/details/{leave_id}")
+@router.post("/leave_details")
 async def get_leave_details(
-    leave_id: str,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """Get detailed information for a specific leave application"""
     try:
         user_id = current_user.get("user_id")
+        body = await request.json()
+        leave_id = body.get("leave_id")
+        
+        if not leave_id:
+            return format_response(
+                success=False,
+                msg="Leave ID is required",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "Leave ID is required"
+                    }
+                }
+            )
         
         service = AppLeaveService()
         result = service.get_leave_details(
@@ -342,9 +307,8 @@ async def get_leave_details(
             }
         )
 
-@router.post("/cancel/{leave_id}")
+@router.post("/cancel_leave")
 async def cancel_leave(
-    leave_id: str,
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
@@ -353,7 +317,21 @@ async def cancel_leave(
         user_id = current_user.get("user_id")
         body = await request.json()
         
+        leave_id = body.get("leave_id")
         reason = body.get("reason", "")
+        
+        if not leave_id:
+            return format_response(
+                success=False,
+                msg="Leave ID is required",
+                statuscode=400,
+                data={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "details": "Leave ID is required"
+                    }
+                }
+            )
         
         service = AppLeaveService()
         result = service.cancel_leave(
@@ -390,7 +368,7 @@ async def cancel_leave(
             }
         )
 
-@router.post("/upload-attachment")
+@router.post("/upload_attachment")
 async def upload_leave_attachment(
     leave_id: str = Form(...),
     attachment: UploadFile = File(...),
@@ -493,31 +471,4 @@ async def upload_leave_attachment(
             }
         )
 
-@router.get("/types")
-async def get_leave_types(
-    current_user: dict = Depends(get_current_user)
-):
-    """Get available leave types and their descriptions"""
-    try:
-        service = AppLeaveService()
-        result = service.get_leave_types()
-        
-        return format_response(
-            success=True,
-            msg="Leave types retrieved successfully",
-            statuscode=200,
-            data=result.get("data", {})
-        )
-        
-    except Exception as e:
-        return format_response(
-            success=False,
-            msg="Internal server error",
-            statuscode=500,
-            data={
-                "error": {
-                    "code": "SERVER_ERROR",
-                    "details": "An unexpected error occurred"
-                }
-            }
-        ) 
+ 

@@ -4,6 +4,7 @@ from sfa.database import client1
 import pytz
 from bson import ObjectId
 from sfa.utils.date_utils import build_audit_fields
+from sfa.utils.code_generator import generate_lead_code
 import os
 import uuid
 
@@ -59,10 +60,25 @@ class AppLeadService:
             if not result.inserted_id:
                 return {"success": False, "message": "Failed to create lead", "error": {"code": "DATABASE_ERROR"}}
 
+            # Generate unique lead code and update the document
+            lead_id_str = str(result.inserted_id)
+            lead_code = generate_lead_code(
+                lead_date=created_fields.get("created_at")
+            )
+            
+            # Update lead with lead_code
+            self.leads_collection.update_one(
+                {"_id": result.inserted_id},
+                {"$set": {"lead_code": lead_code}}
+            )
+
             return {
                 "success": True,
                 "message": "Lead created successfully",
-                "data": {"lead_id": str(result.inserted_id)}
+                "data": {
+                    "lead_id": lead_id_str,
+                    "lead_code": lead_code
+                }
             }
         except Exception as e:
             return {"success": False, "message": f"Failed to create lead: {str(e)}", "error": {"code": "SERVER_ERROR", "details": str(e)}}
@@ -143,5 +159,185 @@ class AppLeadService:
             
         except Exception as e:
             return {"success": False, "message": f"Failed to upload image: {str(e)}", "error": {"code": "SERVER_ERROR", "details": str(e)}}
+
+    def list_leads(self, user_id: str, page: int = 1, limit: int = 20, status: str = None, 
+                   source: str = None, search: str = None, date_from: str = None, date_to: str = None) -> Dict[str, Any]:
+        """Get list of leads with filters and pagination"""
+        try:
+            # Build query
+            query: Dict[str, Any] = {"del": {"$ne": 1}}
+            
+            # Filter by created_by (user's own leads)
+            query["created_by"] = user_id
+            
+            # Status filter (skip if "all" or empty)
+            if status and status != "all":
+                query["status"] = status
+            
+            # Source filter
+            if source:
+                query["source"] = source
+            
+            # Date range filter
+            if date_from:
+                query["created_at"] = {"$gte": date_from}
+            if date_to:
+                if "created_at" in query:
+                    query["created_at"]["$lte"] = date_to
+                else:
+                    query["created_at"] = {"$lte": date_to}
+            
+            # Search filter (mobile, email, city)
+            if search:
+                search_pattern = {"$regex": search, "$options": "i"}
+                query["$or"] = [
+                    {"mobile": search_pattern},
+                    {"email": search_pattern},
+                    {"city": search_pattern},
+                    {"name": search_pattern}
+                ]
+            
+            # Count total documents
+            total = self.leads_collection.count_documents(query)
+            
+            # Calculate pagination
+            skip = (page - 1) * limit
+            total_pages = (total + limit - 1) // limit
+            
+            # Fetch leads
+            leads = list(self.leads_collection.find(query)
+                        .sort("created_at", -1)
+                        .skip(skip)
+                        .limit(limit))
+            
+            # Format lead data
+            lead_list = []
+            for lead in leads:
+                lead_list.append({
+                    "lead_id": str(lead.get("_id")),
+                    "lead_code": lead.get("lead_code", ""),
+                    "name": lead.get("name"),
+                    "mobile": lead.get("mobile"),
+                    "email": lead.get("email"),
+                    "company": lead.get("company"),
+                    "source": lead.get("source"),
+                    "status": lead.get("status", "new"),
+                    "notes": lead.get("notes", ""),
+                    "address": lead.get("address"),
+                    "pincode": lead.get("pincode"),
+                    "city": lead.get("city"),
+                    "state": lead.get("state"),
+                    "country": lead.get("country", "India"),
+                    "created_at": lead.get("created_at"),
+                    "created_time": lead.get("created_time"),
+                    "updated_at": lead.get("updated_at"),
+                    "updated_time": lead.get("updated_time")
+                })
+            
+            # Status counts for filter badges
+            status_list = ["new", "contacted", "qualified", "converted", "lost"]
+            counts = {}
+            for s in status_list:
+                count_query = {**{k: v for k, v in query.items() if k != "status"}, "status": s}
+                counts[s] = self.leads_collection.count_documents(count_query)
+            counts["all"] = self.leads_collection.count_documents({k: v for k, v in query.items() if k != "status"})
+            
+            return {
+                "success": True,
+                "data": {
+                    "list": lead_list,
+                    "counts": counts,
+                    "pagination": {
+                        "page": page,
+                        "limit": limit,
+                        "total": total,
+                        "totalPages": total_pages,
+                        "hasNext": page < total_pages,
+                        "hasPrev": page > 1
+                    }
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to list leads: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_lead_detail(self, user_id: str, lead_id: str) -> Dict[str, Any]:
+        """Get detailed information about a specific lead"""
+        try:
+            # Validate and fetch lead
+            try:
+                lead = self.leads_collection.find_one({
+                    "_id": ObjectId(lead_id),
+                    "del": {"$ne": 1}
+                })
+            except Exception:
+                return {
+                    "success": False,
+                    "message": "Invalid lead_id",
+                    "error": {"code": "INVALID_ID", "details": "lead_id must be a valid ObjectId"}
+                }
+            
+            if not lead:
+                return {
+                    "success": False,
+                    "message": "Lead not found",
+                    "error": {"code": "NOT_FOUND", "details": "Lead does not exist"}
+                }
+            
+            # Format lead details
+            detail = {
+                "lead_id": str(lead.get("_id")),
+                "lead_code": lead.get("lead_code", ""),
+                
+                # Lead Information
+                "lead_information": {
+                    "company_name": lead.get("company") or lead.get("company_name"),
+                    "contact_person": lead.get("name") or lead.get("contact_person"),
+                    "lead_type": lead.get("type") or "Distributor",
+                    "source": lead.get("source"),
+                    "status": lead.get("status", "new")
+                },
+                
+                # Contact Information
+                "contact_information": {
+                    "mobile": lead.get("mobile"),
+                    "email": lead.get("email")
+                },
+                
+                # Address Information
+                "address_information": {
+                    "street": lead.get("address"),
+                    "city": lead.get("city"),
+                    "district": lead.get("district", ""),
+                    "state": lead.get("state"),
+                    "pincode": lead.get("pincode"),
+                    "country": lead.get("country", "India")
+                },
+                
+                # Description/Notes
+                "description": lead.get("notes", ""),
+                
+                # Metadata
+                "created_at": lead.get("created_at"),
+                "created_time": lead.get("created_time"),
+                "updated_at": lead.get("updated_at"),
+                "updated_time": lead.get("updated_time")
+            }
+            
+            return {
+                "success": True,
+                "data": detail
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get lead detail: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
 
 

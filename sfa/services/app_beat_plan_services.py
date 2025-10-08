@@ -817,4 +817,333 @@ class AppBeatPlanService:
                 "message": f"Failed to get beat plans by day: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
+
+    def get_beat_plan_history(self, user_id: str, period: str = "this_month") -> Dict[str, Any]:
+        """Get beat plan history with statistics for last month or this month"""
+        try:
+            from datetime import datetime as _dt
+            from calendar import monthrange
+            
+            now = _dt.now(self.timezone)
+            
+            # Calculate date range based on period
+            if period == "last_month":
+                # Last month
+                if now.month == 1:
+                    target_month = 12
+                    target_year = now.year - 1
+                else:
+                    target_month = now.month - 1
+                    target_year = now.year
+            else:  # this_month
+                target_month = now.month
+                target_year = now.year
+            
+            # Get first and last day of the target month
+            first_day = _dt(target_year, target_month, 1).strftime('%Y-%m-%d')
+            last_day_num = monthrange(target_year, target_month)[1]
+            last_day = _dt(target_year, target_month, last_day_num).strftime('%Y-%m-%d')
+            
+            # Query beat plans for the period
+            query = {
+                "user_id": user_id,
+                "is_active": True,
+                "del": {"$ne": 1},
+                "plan_date": {"$gte": first_day, "$lte": last_day}
+            }
+            
+            beat_plans = list(self.beat_plans_collection.find(query).sort("plan_date", -1))
+            
+            # Initialize statistics
+            total_beat_days = len(beat_plans)
+            total_planned = 0
+            total_completed = 0
+            total_missed = 0
+            total_visit_duration_minutes = 0
+            visit_count = 0
+            
+            # Process each beat plan
+            history_list = []
+            for plan in beat_plans:
+                plan_id = str(plan.get("_id"))
+                plan_date = plan.get("plan_date")
+                customer_ids = plan.get("customer_ids", [])
+                planned_count = len(customer_ids)
+                total_planned += planned_count
+                
+                # Get check-ins for this beat plan date
+                checkins = list(self.customer_checkins_collection.find({
+                    "user_id": user_id,
+                    "plan_date": plan_date,
+                    "del": {"$ne": 1}
+                }))
+                
+                # Calculate completed and missed
+                completed_customer_ids = set()
+                for checkin in checkins:
+                    if checkin.get("status") in ["out", "completed"]:
+                        completed_customer_ids.add(checkin.get("customer_id"))
+                        
+                        # Calculate visit duration
+                        checkin_time = checkin.get("checkin_time")
+                        checkout_time = checkin.get("checkout_time")
+                        if checkin_time and checkout_time:
+                            try:
+                                checkin_dt = _dt.fromisoformat(checkin_time.replace('Z', '+00:00'))
+                                checkout_dt = _dt.fromisoformat(checkout_time.replace('Z', '+00:00'))
+                                duration = checkout_dt - checkin_dt.replace(tzinfo=None)
+                                total_visit_duration_minutes += int(duration.total_seconds() / 60)
+                                visit_count += 1
+                            except Exception:
+                                pass
+                
+                completed_count = len(completed_customer_ids)
+                missed_count = planned_count - completed_count
+                
+                total_completed += completed_count
+                total_missed += missed_count
+                
+                # Determine status
+                if completed_count == planned_count:
+                    status = "completed"
+                    status_label = "Completed"
+                elif completed_count > 0:
+                    status = "partial"
+                    status_label = "Partial"
+                else:
+                    status = "missed"
+                    status_label = "Missed"
+                
+                # Parse date for display
+                try:
+                    date_obj = _dt.strptime(plan_date, '%Y-%m-%d')
+                    month_abbr = date_obj.strftime('%b').upper()
+                    day_num = date_obj.strftime('%d')
+                except Exception:
+                    month_abbr = "JAN"
+                    day_num = "01"
+                
+                history_list.append({
+                    "beat_plan_id": plan_id,
+                    "plan_name": plan.get("plan_name", "Beat Plan"),
+                    "area_name": plan.get("area_name", ""),
+                    "plan_date": plan_date,
+                    "month": month_abbr,
+                    "day": day_num,
+                    "status": status,
+                    "status_label": status_label,
+                    "planned": planned_count,
+                    "completed": completed_count,
+                    "missed": missed_count
+                })
+            
+            # Calculate average visit duration
+            avg_visit_duration_minutes = 0
+            avg_visit_duration_formatted = "0h 0m"
+            if visit_count > 0:
+                avg_visit_duration_minutes = total_visit_duration_minutes // visit_count
+                hours = avg_visit_duration_minutes // 60
+                minutes = avg_visit_duration_minutes % 60
+                avg_visit_duration_formatted = f"{hours}h {minutes}m"
+            
+            return {
+                "success": True,
+                "data": {
+                    "period": period,
+                    "statistics": {
+                        "completed_visits": total_completed,
+                        "missed_visits": total_missed,
+                        "total_beat_days": total_beat_days,
+                        "avg_visit_duration": avg_visit_duration_formatted,
+                        "avg_visit_duration_minutes": avg_visit_duration_minutes
+                    },
+                    "history": history_list
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get beat plan history: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
+
+    def get_beat_plan_detail(self, user_id: str, beat_plan_id: str) -> Dict[str, Any]:
+        """Get detailed information about a specific beat plan with timeline of visits"""
+        try:
+            from datetime import datetime as _dt
+            
+            # Validate and fetch beat plan
+            try:
+                plan = self.beat_plans_collection.find_one({
+                    "_id": ObjectId(beat_plan_id),
+                    "user_id": user_id,
+                    "del": {"$ne": 1}
+                })
+            except Exception:
+                return {
+                    "success": False,
+                    "message": "Invalid beat_plan_id",
+                    "error": {"code": "INVALID_ID", "details": "beat_plan_id must be a valid ObjectId"}
+                }
+            
+            if not plan:
+                return {
+                    "success": False,
+                    "message": "Beat plan not found",
+                    "error": {"code": "NOT_FOUND", "details": "Beat plan does not exist or not assigned to you"}
+                }
+            
+            # Get plan details
+            plan_date = plan.get("plan_date")
+            plan_name = plan.get("plan_name", "Beat Plan")
+            area_name = plan.get("area_name", "")
+            customer_ids = plan.get("customer_ids", [])
+            planned_count = len(customer_ids)
+            
+            # Parse date for display
+            try:
+                date_obj = _dt.strptime(plan_date, '%Y-%m-%d')
+                month_abbr = date_obj.strftime('%b').upper()
+                day_num = date_obj.strftime('%d')
+                year = date_obj.strftime('%Y')
+                formatted_date = f"{month_abbr} {day_num}, {year}"
+            except Exception:
+                formatted_date = plan_date
+                month_abbr = "JAN"
+                day_num = "01"
+                year = "2024"
+            
+            # Get all check-ins for this beat plan date
+            checkins = list(self.customer_checkins_collection.find({
+                "user_id": user_id,
+                "plan_date": plan_date,
+                "del": {"$ne": 1}
+            }).sort("checkin_time", 1))
+            
+            # Calculate statistics
+            completed_customer_ids = set()
+            total_distance_km = 0
+            total_duration_minutes = 0
+            
+            # Build timeline of visits
+            timeline = []
+            for customer_id in customer_ids:
+                # Get customer details
+                try:
+                    customer = self.customers_collection.find_one({"_id": ObjectId(customer_id)})
+                except Exception:
+                    customer = None
+                
+                if not customer:
+                    continue
+                
+                customer_name = customer.get("company_name") or customer.get("name", "Unknown")
+                
+                # Find check-in for this customer
+                checkin = next((c for c in checkins if c.get("customer_id") == customer_id), None)
+                
+                visit_status = "pending"
+                visit_time = None
+                visit_time_formatted = None
+                duration_minutes = 0
+                distance_km = 0
+                
+                if checkin:
+                    checkin_time = checkin.get("checkin_time")
+                    checkout_time = checkin.get("checkout_time")
+                    
+                    # Format visit time
+                    if checkin_time:
+                        try:
+                            checkin_dt = _dt.fromisoformat(checkin_time.replace('Z', '+00:00'))
+                            visit_time_formatted = checkin_dt.strftime('%I:%M %p')
+                            visit_time = checkin_time
+                        except Exception:
+                            visit_time_formatted = "N/A"
+                    
+                    # Calculate duration
+                    if checkin_time and checkout_time:
+                        try:
+                            checkin_dt = _dt.fromisoformat(checkin_time.replace('Z', '+00:00'))
+                            checkout_dt = _dt.fromisoformat(checkout_time.replace('Z', '+00:00'))
+                            duration = checkout_dt - checkin_dt.replace(tzinfo=None)
+                            duration_minutes = int(duration.total_seconds() / 60)
+                            total_duration_minutes += duration_minutes
+                        except Exception:
+                            pass
+                    
+                    # Get distance
+                    distance_m = checkin.get("distance_m", 0)
+                    distance_km = round(distance_m / 1000, 2) if distance_m else 0
+                    total_distance_km += distance_km
+                    
+                    # Determine status
+                    if checkin.get("status") in ["out", "completed"]:
+                        visit_status = "completed"
+                        completed_customer_ids.add(customer_id)
+                    elif checkin.get("status") == "in":
+                        visit_status = "in_progress"
+                
+                timeline.append({
+                    "customer_id": customer_id,
+                    "customer_name": customer_name,
+                    "visit_time": visit_time,
+                    "visit_time_formatted": visit_time_formatted or "Not visited",
+                    "status": visit_status,
+                    "duration_minutes": duration_minutes,
+                    "distance_km": distance_km
+                })
+            
+            # Calculate final statistics
+            completed_count = len(completed_customer_ids)
+            missed_count = planned_count - completed_count
+            
+            # Determine overall status
+            if completed_count == planned_count:
+                overall_status = "completed"
+                status_label = "Completed"
+            elif completed_count > 0:
+                overall_status = "partial"
+                status_label = "Partial"
+            else:
+                overall_status = "missed"
+                status_label = "Missed"
+            
+            # Format total duration
+            hours = total_duration_minutes // 60
+            minutes = total_duration_minutes % 60
+            total_duration_formatted = f"{hours}h {minutes}m"
+            
+            return {
+                "success": True,
+                "data": {
+                    "beat_plan_id": beat_plan_id,
+                    "plan_date": plan_date,
+                    "formatted_date": formatted_date,
+                    "month": month_abbr,
+                    "day": day_num,
+                    "year": year,
+                    "plan_name": plan_name,
+                    "area_name": area_name,
+                    "status": overall_status,
+                    "status_label": status_label,
+                    "statistics": {
+                        "planned": planned_count,
+                        "completed": completed_count,
+                        "missed": missed_count,
+                        "total_distance_km": round(total_distance_km, 1),
+                        "total_duration": total_duration_formatted,
+                        "total_duration_minutes": total_duration_minutes
+                    },
+                    "timeline": timeline
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get beat plan detail: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
     

@@ -5,17 +5,18 @@ from sfa.database import client1
 from dotenv import load_dotenv
 from bson import ObjectId
 import pytz
-import math
 import uuid
 import shutil
+from sfa.utils.date_utils import build_audit_fields
 
 load_dotenv()
 
 class AppLeaveService:
     def __init__(self):
-        self.client_database = client1['hrms_master']
+        self.client_database = client1['talbros']
+        self.field_squad_database = client1['field_squad']
         self.leave_collection = self.client_database['leave_applications']
-        self.employee_collection = self.client_database['employee_master']
+        self.users_collection = self.field_squad_database['users']
         self.leave_balance_collection = self.client_database['leave_balances']
         self.timezone = pytz.timezone('Asia/Kolkata')  # Default to IST
 
@@ -27,7 +28,7 @@ class AppLeaveService:
         except:
             return date_str
 
-    def _calculate_leave_days(self, start_date, end_date, half_day=False, half_day_type=None):
+    def _calculate_leave_days(self, start_date, end_date):
         """Calculate number of leave days between start and end date"""
         try:
             start = datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -46,10 +47,6 @@ class AppLeaveService:
                     working_days += 1
                 current += timedelta(days=1)
             
-            # Handle half day
-            if half_day and working_days == 1:
-                return 0.5
-            
             return working_days
         except:
             return 0
@@ -59,19 +56,15 @@ class AppLeaveService:
         leave_type_names = {
             "casual": "Casual Leave",
             "sick": "Sick Leave",
-            "annual": "Annual Leave",
-            "maternity": "Maternity Leave",
-            "paternity": "Paternity Leave",
-            "bereavement": "Bereavement Leave",
             "other": "Other Leave"
         }
         return leave_type_names.get(leave_type, leave_type.title())
 
-    def apply_leave(self, user_id, leave_type, start_date, end_date, reason="", half_day=False, half_day_type=None):
+    def apply_leave(self, user_id, leave_type, start_date, end_date, reason=""):
         """Apply for leave"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,
@@ -87,10 +80,6 @@ class AppLeaveService:
                     "user_id": user_id,
                     "casual": {"total": 12, "used": 0, "remaining": 12},
                     "sick": {"total": 15, "used": 0, "remaining": 15},
-                    "annual": {"total": 21, "used": 0, "remaining": 21},
-                    "maternity": {"total": 180, "used": 0, "remaining": 180},
-                    "paternity": {"total": 15, "used": 0, "remaining": 15},
-                    "bereavement": {"total": 7, "used": 0, "remaining": 7},
                     "other": {"total": 10, "used": 0, "remaining": 10},
                     "created_at": datetime.now(self.timezone).isoformat(),
                     "updated_at": datetime.now(self.timezone).isoformat()
@@ -138,7 +127,7 @@ class AppLeaveService:
                 }
 
             # Calculate leave days
-            leave_days = self._calculate_leave_days(start_date, end_date, half_day, half_day_type)
+            leave_days = self._calculate_leave_days(start_date, end_date)
             if leave_days <= 0:
                 return {
                     "success": False,
@@ -171,6 +160,18 @@ class AppLeaveService:
                     "error": {"code": "OVERLAP_ERROR", "details": "You already have a leave application for these dates"}
                 }
             # Create leave application
+            created_fields = build_audit_fields(prefix="applied", by=user_id, timezone="Asia/Kolkata")
+            updated_fields = build_audit_fields(prefix="updated", by=user_id, timezone="Asia/Kolkata")
+            
+            # Create status history
+            status_history = [{
+                "status": "pending",
+                "changed_by": user_id,
+                "changed_at": created_fields.get("applied_at"),
+                "changed_time": created_fields.get("applied_time"),
+                "remarks": "Leave application submitted"
+            }]
+            
             leave_data = {
                 "user_id": user_id,
                 "employee_id": user_id,
@@ -179,13 +180,10 @@ class AppLeaveService:
                 "end_date": end_date,
                 "leave_days": leave_days,
                 "reason": reason,
-                "half_day": half_day,
-                "half_day_type": half_day_type,
                 "status": "pending",
-                "applied_by": user_id,
-                "applied_at": datetime.now(self.timezone).isoformat(),
-                "created_at": datetime.now(self.timezone).isoformat(),
-                "updated_at": datetime.now(self.timezone).isoformat()
+                "status_history": status_history,
+                **created_fields,
+                **updated_fields
             }
             result = self.leave_collection.insert_one(leave_data)
             if result.inserted_id:
@@ -265,7 +263,7 @@ class AppLeaveService:
         """Get user's leave history with pagination and filtering"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,
@@ -292,32 +290,34 @@ class AppLeaveService:
             skip = (page - 1) * limit
             leave_records = list(self.leave_collection.find(query).sort("applied_at", -1).skip(skip).limit(limit))
 
-            # Process records
+            # Process records for UI
             leave_list = []
             for record in leave_records:
+                # Get user name from users collection
+                user = self.users_collection.find_one({"_id": ObjectId(record["user_id"])})
+                user_name = user.get("name", "Unknown") if user else "Unknown"
+                
+                # Format dates for display
+                from_date_obj = datetime.strptime(record["start_date"], "%Y-%m-%d")
+                to_date_obj = datetime.strptime(record["end_date"], "%Y-%m-%d")
+                applied_date_obj = datetime.strptime(record.get("applied_at", ""), "%Y-%m-%d") if record.get("applied_at") else None
+                
                 leave_data = {
-                    "id": str(record["_id"]),
-                    "leaveType": record["leave_type"],
-                    "leaveTypeDisplay": self._get_leave_type_display_name(record["leave_type"]),
-                    "startDate": record["start_date"],
-                    "endDate": record["end_date"],
-                    "startDateFormatted": self._format_date(record["start_date"]),
-                    "endDateFormatted": self._format_date(record["end_date"]),
-                    "leaveDays": record["leave_days"],
+                    "_id": str(record["_id"]),
+                    "leave_type": record["leave_type"],
+                    "leave_type_display": self._get_leave_type_display_name(record["leave_type"]),
+                    "user_name": user_name,
+                    "from_date": record["start_date"],
+                    "from_date_formatted": from_date_obj.strftime("%b %d, %Y"),
+                    "to_date": record["end_date"],
+                    "to_date_formatted": to_date_obj.strftime("%b %d, %Y"),
+                    "days": record["leave_days"],
                     "reason": record.get("reason", ""),
                     "status": record["status"],
-                    "halfDay": record.get("half_day", False),
-                    "halfDayType": record.get("half_day_type"),
-                    "appliedAt": record["applied_at"],
-                    "appliedAtFormatted": self._format_date(record["applied_at"].split("T")[0]),
-                    "approvedBy": record.get("approved_by"),
-                    "approvedAt": record.get("approved_at"),
-                    "rejectedBy": record.get("rejected_by"),
-                    "rejectedAt": record.get("rejected_at"),
-                    "rejectionReason": record.get("rejection_reason", ""),
-                    "cancelledBy": record.get("cancelled_by"),
-                    "cancelledAt": record.get("cancelled_at"),
-                    "cancellationReason": record.get("cancellation_reason", "")
+                    "applied_date": record.get("applied_at"),
+                    "applied_date_formatted": applied_date_obj.strftime("%b %d, %Y") if applied_date_obj else "",
+                    "applied_time": record.get("applied_time"),
+                    "status_history": record.get("status_history", [])
                 }
                 leave_list.append(leave_data)
 
@@ -333,11 +333,27 @@ class AppLeaveService:
                 "hasPrev": page > 1
             }
 
+            # Calculate status counts for tabs
+            base_query = {"user_id": user_id}
+            if leave_type:
+                base_query["leave_type"] = leave_type
+            if year:
+                base_query["start_date"] = {"$regex": f"^{year}-"}
+            
+            status_counts = {
+                "all": self.leave_collection.count_documents(base_query),
+                "pending": self.leave_collection.count_documents({**base_query, "status": "pending"}),
+                "approved": self.leave_collection.count_documents({**base_query, "status": "approved"}),
+                "rejected": self.leave_collection.count_documents({**base_query, "status": "rejected"}),
+                "cancelled": self.leave_collection.count_documents({**base_query, "status": "cancelled"})
+            }
+
             return {
                 "success": True,
                 "data": {
                     "leaves": leave_list,
-                    "pagination": pagination
+                    "pagination": pagination,
+                    "status_counts": status_counts
                 }
             }
 
@@ -352,7 +368,7 @@ class AppLeaveService:
         """Get user's leave balance for different leave types"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,
@@ -369,10 +385,6 @@ class AppLeaveService:
                     "user_id": user_id,
                     "casual": {"total": 12, "used": 0, "remaining": 12},
                     "sick": {"total": 15, "used": 0, "remaining": 15},
-                    "annual": {"total": 21, "used": 0, "remaining": 21},
-                    "maternity": {"total": 180, "used": 0, "remaining": 180},
-                    "paternity": {"total": 15, "used": 0, "remaining": 15},
-                    "bereavement": {"total": 7, "used": 0, "remaining": 7},
                     "other": {"total": 10, "used": 0, "remaining": 10},
                     "created_at": datetime.now(self.timezone).isoformat(),
                     "updated_at": datetime.now(self.timezone).isoformat()
@@ -410,7 +422,7 @@ class AppLeaveService:
         """Get detailed information for a specific leave application"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,
@@ -431,31 +443,66 @@ class AppLeaveService:
                     "error": {"code": "LEAVE_NOT_FOUND", "details": "Leave application does not exist"}
                 }
 
-            # Format leave details
+            # Format dates for UI
+            from_date_obj = datetime.strptime(leave_record["start_date"], "%Y-%m-%d")
+            to_date_obj = datetime.strptime(leave_record["end_date"], "%Y-%m-%d")
+            
+            # Format date range display
+            date_range = f"{from_date_obj.strftime('%a %b %d %Y')} - {to_date_obj.strftime('%a %b %d %Y')}"
+            date_range_formatted = f"{from_date_obj.strftime('%a %b %d %Y')} - {to_date_obj.strftime('%a %b %d %Y')}"
+            
+            # Format requested date
+            applied_date_obj = datetime.strptime(leave_record.get("applied_at", ""), "%Y-%m-%d") if leave_record.get("applied_at") else None
+            requested_on = applied_date_obj.strftime("%A, %B %d, %Y") if applied_date_obj else ""
+            
+            # Format timeline from status_history
+            timeline = []
+            status_history = leave_record.get("status_history", [])
+            for history in status_history:
+                status_text = ""
+                if history["status"] == "pending":
+                    status_text = "Request Submitted"
+                elif history["status"] == "approved":
+                    status_text = "Request Approved"
+                elif history["status"] == "rejected":
+                    status_text = "Request Rejected"
+                elif history["status"] == "cancelled":
+                    status_text = "Request Cancelled"
+                
+                # Format timeline date and time
+                timeline_date = history.get("changed_at", "")
+                timeline_time = history.get("changed_time", "")
+                if timeline_date and timeline_time:
+                    dt_obj = datetime.strptime(f"{timeline_date} {timeline_time}", "%Y-%m-%d %H:%M:%S")
+                    timeline_datetime = dt_obj.strftime("%b %d, %Y, %I:%M %p")
+                else:
+                    timeline_datetime = ""
+                
+                timeline.append({
+                    "status": history["status"],
+                    "status_text": status_text,
+                    "datetime": timeline_datetime,
+                    "changed_by": history.get("changed_by"),
+                    "remarks": history.get("remarks", "")
+                })
+            
+            # Format leave details for UI
             leave_details = {
-                "id": str(leave_record["_id"]),
-                "leaveType": leave_record["leave_type"],
-                "leaveTypeDisplay": self._get_leave_type_display_name(leave_record["leave_type"]),
-                "startDate": leave_record["start_date"],
-                "endDate": leave_record["end_date"],
-                "startDateFormatted": self._format_date(leave_record["start_date"]),
-                "endDateFormatted": self._format_date(leave_record["end_date"]),
-                "leaveDays": leave_record["leave_days"],
-                "reason": leave_record.get("reason", ""),
+                "_id": str(leave_record["_id"]),
                 "status": leave_record["status"],
-                "halfDay": leave_record.get("half_day", False),
-                "halfDayType": leave_record.get("half_day_type"),
-                "appliedAt": leave_record["applied_at"],
-                "appliedAtFormatted": self._format_date(leave_record["applied_at"].split("T")[0]),
-                "approvedBy": leave_record.get("approved_by"),
-                "approvedAt": leave_record.get("approved_at"),
-                "rejectedBy": leave_record.get("rejected_by"),
-                "rejectedAt": leave_record.get("rejected_at"),
-                "rejectionReason": leave_record.get("rejection_reason", ""),
-                "cancelledBy": leave_record.get("cancelled_by"),
-                "cancelledAt": leave_record.get("cancelled_at"),
-                "cancellationReason": leave_record.get("cancellation_reason", ""),
-                "attachments": leave_record.get("attachments", [])
+                "status_display": leave_record["status"].upper(),
+                "days": leave_record["leave_days"],
+                "date_range": date_range,
+                "date_range_formatted": date_range_formatted,
+                "leave_type": leave_record["leave_type"],
+                "leave_type_display": self._get_leave_type_display_name(leave_record["leave_type"]),
+                "from_date": leave_record["start_date"],
+                "from_date_formatted": from_date_obj.strftime("%a %b %d %Y"),
+                "to_date": leave_record["end_date"],
+                "to_date_formatted": to_date_obj.strftime("%a %b %d %Y"),
+                "reason": leave_record.get("reason", ""),
+                "requested_on": requested_on,
+                "timeline": timeline
             }
 
             return {
@@ -474,7 +521,7 @@ class AppLeaveService:
         """Cancel a leave application"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,
@@ -495,46 +542,66 @@ class AppLeaveService:
                     "error": {"code": "LEAVE_NOT_FOUND", "details": "Leave application does not exist"}
                 }
 
-            # Check if leave can be cancelled
-            if leave_record["status"] not in ["pending", "approved"]:
+            # Check if leave can be cancelled - only pending status allowed
+            if leave_record["status"] != "pending":
                 return {
                     "success": False,
                     "message": "Leave cannot be cancelled",
-                    "error": {"code": "INVALID_STATUS", "details": "Only pending or approved leaves can be cancelled"}
+                    "error": {"code": "INVALID_STATUS", "details": "Only pending leaves can be cancelled"}
                 }
 
-            # Check if leave has already started
-            start_date = datetime.strptime(leave_record["start_date"], "%Y-%m-%d").date()
-            today = datetime.now(self.timezone).date()
+            # Get leave details for balance restoration
+            leave_type = leave_record["leave_type"]
+            leave_days = leave_record["leave_days"]
+
+            # Update leave record with status history
+            from sfa.utils.date_utils import build_audit_fields
+            updated_fields = build_audit_fields(prefix="updated", by=user_id, timezone="Asia/Kolkata")
+            cancelled_fields = build_audit_fields(prefix="cancelled", by=user_id, timezone="Asia/Kolkata")
             
-            if start_date <= today:
-                return {
-                    "success": False,
-                    "message": "Cannot cancel leave that has already started",
-                    "error": {"code": "INVALID_CANCELLATION", "details": "Leave has already started"}
-                }
-
-            # Update leave record
-            update_data = {
+            # Add to status history
+            status_history_entry = {
                 "status": "cancelled",
-                "cancelled_by": user_id,
-                "cancelled_at": datetime.now(self.timezone).isoformat(),
-                "cancellation_reason": reason,
-                "updated_at": datetime.now(self.timezone).isoformat()
+                "changed_by": user_id,
+                "changed_at": cancelled_fields.get("cancelled_at"),
+                "changed_time": cancelled_fields.get("cancelled_time"),
+                "remarks": reason if reason else "Leave cancelled by user"
             }
 
             result = self.leave_collection.update_one(
                 {"_id": ObjectId(leave_id)},
-                {"$set": update_data}
+                {
+                    "$set": {
+                        "status": "cancelled",
+                        "cancellation_reason": reason,
+                        **cancelled_fields,
+                        **updated_fields
+                    },
+                    "$push": {"status_history": status_history_entry}
+                }
             )
 
             if result.modified_count > 0:
+                # Return leave days back to balance
+                self.leave_balance_collection.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$inc": {
+                            f"{leave_type}.used": -leave_days,
+                            f"{leave_type}.remaining": leave_days
+                        },
+                        "$set": {"updated_at": datetime.now(self.timezone).isoformat()}
+                    }
+                )
+                
                 return {
                     "success": True,
-                    "message": "Leave cancelled successfully",
+                    "message": "Leave cancelled successfully and balance restored",
                     "data": {
                         "leave_id": leave_id,
-                        "status": "cancelled"
+                        "status": "cancelled",
+                        "restored_days": leave_days,
+                        "leave_type": leave_type
                     }
                 }
             else:
@@ -551,80 +618,11 @@ class AppLeaveService:
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
             }
 
-    def get_leave_types(self):
-        """Get available leave types and their descriptions"""
-        try:
-            leave_types = [
-                {
-                    "type": "casual",
-                    "displayName": "Casual Leave",
-                    "description": "Short-term leave for personal reasons",
-                    "maxDays": 12,
-                    "requiresApproval": True
-                },
-                {
-                    "type": "sick",
-                    "displayName": "Sick Leave",
-                    "description": "Leave for medical reasons",
-                    "maxDays": 15,
-                    "requiresApproval": True
-                },
-                {
-                    "type": "annual",
-                    "displayName": "Annual Leave",
-                    "description": "Regular vacation leave",
-                    "maxDays": 21,
-                    "requiresApproval": True
-                },
-                {
-                    "type": "maternity",
-                    "displayName": "Maternity Leave",
-                    "description": "Leave for expecting mothers",
-                    "maxDays": 180,
-                    "requiresApproval": True
-                },
-                {
-                    "type": "paternity",
-                    "displayName": "Paternity Leave",
-                    "description": "Leave for new fathers",
-                    "maxDays": 15,
-                    "requiresApproval": True
-                },
-                {
-                    "type": "bereavement",
-                    "displayName": "Bereavement Leave",
-                    "description": "Leave for family bereavement",
-                    "maxDays": 7,
-                    "requiresApproval": True
-                },
-                {
-                    "type": "other",
-                    "displayName": "Other Leave",
-                    "description": "Other types of leave",
-                    "maxDays": 10,
-                    "requiresApproval": True
-                }
-            ]
-
-            return {
-                "success": True,
-                "data": {
-                    "leaveTypes": leave_types
-                }
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"Failed to get leave types: {str(e)}",
-                "error": {"code": "SERVER_ERROR", "details": str(e)}
-            } 
-
     def upload_leave_attachment(self, user_id, leave_id, attachment):
         """Upload attachment for a specific leave application"""
         try:
             # Check if user exists
-            user = self.employee_collection.find_one({"_id": ObjectId(user_id)})
+            user = self.users_collection.find_one({"_id": ObjectId(user_id), "del": {"$ne": 1}})
             if not user:
                 return {
                     "success": False,

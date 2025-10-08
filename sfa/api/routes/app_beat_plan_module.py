@@ -443,3 +443,81 @@ async def end_checkin(request: Request, current_user: dict = Depends(get_current
             statuscode=500,
             data={"error": {"code": "SERVER_ERROR", "details": "An unexpected error occurred"}}
         )
+
+@router.post("/beat_plan_history")
+async def get_beat_plan_history(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get beat plan history with statistics for last month or this month"""
+    try:
+        body = await request.json()
+        user_id = current_user.get("user_id")
+        
+        # period: last_month | this_month (default: this_month)
+        period = body.get("period", "this_month")
+        
+        service = AppBeatPlanService()
+        result = service.get_beat_plan_history(user_id, period)
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get beat plan history"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg="Beat plan history retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+        
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={"error": {"code": "SERVER_ERROR", "details": "An unexpected error occurred"}}
+        )
+
+@router.post("/beat_plan_detail")
+async def get_beat_plan_detail(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get detailed information about a specific beat plan"""
+    try:
+        body = await request.json()
+        user_id = current_user.get("user_id")
+        
+        beat_plan_id = body.get("beat_plan_id")
+        if not beat_plan_id:
+            return format_response(
+                success=False,
+                msg="beat_plan_id is required",
+                statuscode=400,
+                data={"error": {"code": "VALIDATION_ERROR", "details": "beat_plan_id is required"}}
+            )
+        
+        service = AppBeatPlanService()
+        result = service.get_beat_plan_detail(user_id, beat_plan_id)
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get beat plan details"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg="Beat plan details retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+        
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={"error": {"code": "SERVER_ERROR", "details": "An unexpected error occurred"}}
+        )
