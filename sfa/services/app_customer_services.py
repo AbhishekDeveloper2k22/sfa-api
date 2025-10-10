@@ -121,3 +121,144 @@ class AppCustomerService:
             return {"success": True, "data": profile}
         except Exception as e:
             return {"success": False, "message": f"Failed to get profile: {str(e)}", "error": {"code": "SERVER_ERROR", "details": str(e), "traceback": traceback.format_exc()}}
+
+    def get_customer_list(self, user_id: str, status_filter: str = "all", page: int = 1, limit: int = 20) -> Dict[str, Any]:
+        try:
+            # Build query based on filters
+            query = {
+                "assign_user_id": user_id,
+                "del": {"$ne": 1}
+            }
+            
+            # Apply status filter
+            if status_filter == "active":
+                query["status"] = "active"
+            elif status_filter == "pending":
+                query["status"] = {"$in": ["pending", "inactive"]}
+            # For "all", no additional status filter needed
+            
+            # Calculate skip for pagination
+            skip = (page - 1) * limit
+            
+            # Get total count
+            total_count = self.customers.count_documents(query)
+            
+            # Get customers with pagination
+            customers_cursor = self.customers.find(query).skip(skip).limit(limit).sort("created_at", -1)
+            customers = list(customers_cursor)
+            
+            # Get customer type names for all customers
+            customer_type_ids = [c.get("customer_type") for c in customers if c.get("customer_type")]
+            customer_types = {}
+            if customer_type_ids:
+                type_docs = self.all_types.find({
+                    "customer_type": {"$in": customer_type_ids},
+                    "del": {"$ne": 1}
+                })
+                for type_doc in type_docs:
+                    customer_types[type_doc.get("customer_type")] = type_doc.get("name", "")
+            
+            # Get order stats for all customers
+            customer_ids = [str(c["_id"]) for c in customers]
+            order_stats = {}
+            if customer_ids:
+                try:
+                    # Get order counts and total values
+                    agg_pipeline = [
+                        {"$match": {"customer_id": {"$in": customer_ids}, "del": {"$ne": 1}}},
+                        {"$group": {
+                            "_id": "$customer_id",
+                            "total_orders": {"$sum": 1},
+                            "total_value": {"$sum": "$total_amount"},
+                            "last_order_date": {"$max": "$created_at"}
+                        }}
+                    ]
+                    order_agg = self.orders.aggregate(agg_pipeline)
+                    for stat in order_agg:
+                        order_stats[stat["_id"]] = {
+                            "total_orders": stat.get("total_orders", 0),
+                            "total_value": float(stat.get("total_value", 0)),
+                            "last_order_date": stat.get("last_order_date", "")
+                        }
+                except Exception:
+                    # Orders collection might not exist
+                    pass
+            
+            # Format customer list
+            customer_list = []
+            for customer in customers:
+                customer_id = str(customer["_id"])
+                customer_type_name = customer_types.get(customer.get("customer_type"), "")
+                order_stat = order_stats.get(customer_id, {"total_orders": 0, "total_value": 0.0, "last_order_date": ""})
+                
+                customer_data = {
+                    "id": customer_id,
+                    "name": customer.get("name", ""),
+                    "company_name": customer.get("company_name", ""),
+                    "email": customer.get("email", ""),
+                    "phone": customer.get("mobile") or customer.get("phone", ""),
+                    "alternate_phone": customer.get("alternate_phone", ""),
+                    "whatsapp": customer.get("whatsapp", ""),
+                    "type": customer.get("type", ""),
+                    "customer_type": customer_type_name,
+                    "customer_type_id": customer.get("customer_type"),
+                    "status": customer.get("status", "active"),
+                    "address": customer.get("billing_address", ""),
+                    "city": customer.get("city", ""),
+                    "state": customer.get("state", ""),
+                    "pincode": customer.get("pincode", ""),
+                    "latitude": customer.get("latitude", ""),
+                    "longitude": customer.get("longitude", ""),
+                    "gst_number": customer.get("gst_number", ""),
+                    "pan_number": customer.get("pan_number", ""),
+                    "credit_limit": customer.get("credit_limit", ""),
+                    "contact_person": customer.get("contact_person", ""),
+                    "designation": customer.get("designation", ""),
+                    "created_at": customer.get("created_at", ""),
+                    "created_at_time": customer.get("created_at_time", ""),
+                    "total_orders": order_stat["total_orders"],
+                    "total_value": order_stat["total_value"],
+                    "last_order_date": order_stat["last_order_date"]
+                }
+                customer_list.append(customer_data)
+            
+            # Count by status for summary
+            status_counts = {
+                "all": total_count,
+                "active": 0,
+                "pending": 0
+            }
+            
+            # Get status counts
+            try:
+                active_count = self.customers.count_documents({
+                    "assign_user_id": user_id,
+                    "status": "active",
+                    "del": {"$ne": 1}
+                })
+                pending_count = self.customers.count_documents({
+                    "assign_user_id": user_id,
+                    "status": {"$in": ["pending", "inactive"]},
+                    "del": {"$ne": 1}
+                })
+                status_counts["active"] = active_count
+                status_counts["pending"] = pending_count
+            except Exception:
+                pass
+            
+            return {
+                "success": True,
+                "data": {
+                    "customers": customer_list,
+                    "pagination": {
+                        "page": page,
+                        "limit": limit,
+                        "total": total_count,
+                        "total_pages": (total_count + limit - 1) // limit
+                    },
+                    "status_counts": status_counts
+                }
+            }
+            
+        except Exception as e:
+            return {"success": False, "message": f"Failed to get customer list: {str(e)}", "error": {"code": "SERVER_ERROR", "details": str(e), "traceback": traceback.format_exc()}}
