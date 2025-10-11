@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request
 from sfa.middlewares.web_location_middleware import LocationDataProcessor
 import traceback
+from sfa.utils.response import format_response
 
 router = APIRouter()
 
@@ -10,9 +11,19 @@ async def location_unique(request: Request):
     instance = LocationDataProcessor()
     try:
         result = instance.unique(request_data)
-        return result
+        return format_response(
+            success=True,
+            msg="Location data retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
     except Exception as e:
         tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+        return format_response(
+            success=False,
+            msg="Failed to retrieve location data",
+            statuscode=500,
+            data={"error": str(e), "traceback": tb}
+        )
 
 
