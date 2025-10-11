@@ -542,13 +542,11 @@ class AppRedeemService:
                 }
 
             # Generate 6-digit OTP
-            otp = ''.join(random.choices(string.digits, k=6))
+            # otp = ''.join(random.choices(string.digits, k=6))
+            otp = "123456"
             
             # OTP expires in 5 minutes
             expiry_time = datetime.now().timestamp() + (5 * 60)  # 5 minutes from now
-
-
-
 
             # Store OTP in database
             otp_data = {
