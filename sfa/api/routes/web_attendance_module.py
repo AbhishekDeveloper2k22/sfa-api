@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request
 from sfa.middlewares.web_attendance_middleware import AttendanceDataProcessor
 import traceback
+from sfa.utils.response import format_response
 
 router = APIRouter()
 
@@ -10,9 +11,19 @@ async def attendance_list(request: Request):
     instance = AttendanceDataProcessor()
     try:
         result = instance.attendance_list(request_data)
-        return result
+        return format_response(
+            success=True, 
+            msg="Attendance list retrieved successfully", 
+            statuscode=200, 
+            data=result.get("data", {})
+        )
     except Exception as e:
         tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+        return format_response(
+            success=False,
+            msg="Failed to retrieve attendance list",
+            statuscode=500,
+            data={"error": str(e), "traceback": tb}
+        )
 
 

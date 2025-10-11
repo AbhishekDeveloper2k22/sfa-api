@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Request, UploadFile, File, Form
 from sfa.middlewares.web_product_middleware import ProductDataProcessor
 import traceback
+from sfa.utils.response import format_response
 
 router = APIRouter()
 
@@ -10,10 +11,20 @@ async def add_product(request: Request):
     instance = ProductDataProcessor()
     try:
         result = instance.product_add(request_data)
-        return result
+        return format_response(
+            success=True,
+            msg="Product added successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
     except Exception as e:
         tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+        return format_response(
+            success=False,
+            msg="Failed to add product",
+            statuscode=500,
+            data={"error": str(e), "traceback": tb}
+        )
 
 @router.post("/product_list")
 async def product_list(request: Request):
@@ -21,10 +32,20 @@ async def product_list(request: Request):
     instance = ProductDataProcessor()
     try:
         result = instance.products_list(request_data)
-        return result
+        return format_response(
+            success=True,
+            msg="Product list retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
     except Exception as e:
         tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+        return format_response(
+            success=False,
+            msg="Failed to retrieve product list",
+            statuscode=500,
+            data={"error": str(e), "traceback": tb}
+        )
 
 @router.post("/product_details")
 async def product_details(request: Request):
@@ -32,19 +53,39 @@ async def product_details(request: Request):
     instance = ProductDataProcessor()
     try:
         result = instance.product_details(request_data)
-        return result
+        return format_response(
+            success=True,
+            msg="Product details retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
     except Exception as e:
         tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+        return format_response(
+            success=False,
+            msg="Failed to retrieve product details",
+            statuscode=500,
+            data={"error": str(e), "traceback": tb}
+        )
 
 @router.post("/product_image")
 async def product_image(product_id: str = Form(...), file: UploadFile = File(...)):
     instance = ProductDataProcessor()
     try:
         result = instance.product_image_update(product_id, file)
-        return result
+        return format_response(
+            success=True,
+            msg="Product image updated successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
     except Exception as e:
         tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+        return format_response(
+            success=False,
+            msg="Failed to update product image",
+            statuscode=500,
+            data={"error": str(e), "traceback": tb}
+        )
 
 
