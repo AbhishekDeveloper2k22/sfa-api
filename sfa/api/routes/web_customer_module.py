@@ -15,7 +15,7 @@ async def customer_add(request: Request):
             success=True,
             msg="Customer added successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -36,7 +36,7 @@ async def customer_list(request: Request):
             success=True,
             msg="Customer list retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -57,7 +57,7 @@ async def customer_details(request: Request):
             success=True,
             msg="Customer details retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -77,7 +77,7 @@ async def customer_image(customer_id: str = Form(...), file: UploadFile = File(.
             success=True,
             msg="Customer image updated successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()

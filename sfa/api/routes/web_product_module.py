@@ -15,7 +15,7 @@ async def add_product(request: Request):
             success=True,
             msg="Product added successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -36,7 +36,7 @@ async def product_list(request: Request):
             success=True,
             msg="Product list retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -57,7 +57,7 @@ async def product_details(request: Request):
             success=True,
             msg="Product details retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -77,7 +77,7 @@ async def product_image(product_id: str = Form(...), file: UploadFile = File(...
             success=True,
             msg="Product image updated successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()

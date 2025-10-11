@@ -15,7 +15,7 @@ async def lead_add(request: Request):
             success=True,
             msg="Lead added successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -36,7 +36,7 @@ async def lead_list(request: Request):
             success=True,
             msg="Lead list retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -57,7 +57,7 @@ async def lead_details(request: Request):
             success=True,
             msg="Lead details retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -77,7 +77,7 @@ async def lead_image(lead_id: str = Form(...), file: UploadFile = File(...)):
             success=True,
             msg="Lead image updated successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
