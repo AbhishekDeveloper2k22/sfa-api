@@ -15,7 +15,7 @@ async def add_category(request: Request):
             success=True, 
             msg="Category added successfully", 
             statuscode=200, 
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -35,7 +35,7 @@ async def category_image(category_id: str = Form(...), file: UploadFile = File(.
             success=True,
             msg="Category image updated successfully", 
             statuscode=200, 
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -56,7 +56,7 @@ async def categories_list(request: Request):
             success=True, 
             msg="Categories list retrieved successfully", 
             statuscode=200, 
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -77,7 +77,7 @@ async def check_category_exists(request: Request):
             success=True, 
             msg="Category exists check completed successfully", 
             statuscode=200, 
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -98,7 +98,7 @@ async def category_details(request: Request):
             success=True, 
             msg="Category details retrieved successfully", 
             statuscode=200, 
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()

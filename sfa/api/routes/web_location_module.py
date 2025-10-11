@@ -15,7 +15,7 @@ async def location_unique(request: Request):
             success=True,
             msg="Location data retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()

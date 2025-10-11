@@ -15,7 +15,7 @@ async def all_types(request: Request):
             success=True,
             msg="All types info retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -36,7 +36,7 @@ async def add_users(request: Request):
             success=True,
             msg="User added successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -57,7 +57,7 @@ async def users(request: Request):
             success=True,
             msg="User list retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -78,7 +78,7 @@ async def check_user_exists(request: Request):
             success=True,
             msg="User exists check completed successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -99,7 +99,7 @@ async def user_details(request: Request):
             success=True,
             msg="User details retrieved successfully",
             statuscode=200,
-            data=result.get("data", {})
+            data=result.get("data", {}) if isinstance(result, dict) else result
         )
     except Exception as e:
         tb = traceback.format_exc()
