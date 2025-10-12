@@ -4,6 +4,8 @@ from sfa.utils.response import format_response
 from typing import Optional
 import jwt
 from datetime import datetime, timedelta
+import traceback
+import os
 
 router = APIRouter()
 
@@ -121,6 +123,9 @@ async def start_attend(request: Request, current_user: dict = Depends(get_curren
         )
         
     except Exception as e:
+        error_traceback = traceback.format_exc()
+        print(f"Error in upload_attendance_image: {str(e)}")
+        print(f"Traceback: {error_traceback}")
         return format_response(
             success=False,
             msg="Internal server error",
@@ -128,7 +133,8 @@ async def start_attend(request: Request, current_user: dict = Depends(get_curren
             data={
                 "error": {
                     "code": "SERVER_ERROR",
-                    "details": "An unexpected error occurred"
+                    "details": str(e),
+                    "traceback": error_traceback
                 }
             }
         )
