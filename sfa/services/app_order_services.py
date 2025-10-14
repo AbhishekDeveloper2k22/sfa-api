@@ -461,7 +461,7 @@ class AppOrderService:
             subtotal = float(doc.get("subtotal", 0) or 0)
             gst_percentage = 5.0
             gst_amount = self._round2(subtotal * (gst_percentage / 100.0))
-            grand_total = self._round2(subtotal + gst_amount)
+            grand_total = self._round2(subtotal)
 
             detail = {
                 "order_id": str(doc.get("_id")),
