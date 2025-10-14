@@ -49,7 +49,11 @@ async def add_users(request: Request):
     
 @router.post("/user_list")
 async def users(request: Request):
-    request_data = await request.json()
+    try:
+        request_data = await request.json()
+    except:
+        request_data = {}
+    
     instanceClass = DataProcessor()
     try:
         result = instanceClass.users_list(request_data)
@@ -57,7 +61,7 @@ async def users(request: Request):
             success=True,
             msg="User list retrieved successfully",
             statuscode=200,
-            data=result.get("data", {}) if isinstance(result, dict) else result
+            data=result if isinstance(result, dict) else {}
         )
     except Exception as e:
         tb = traceback.format_exc()
@@ -106,6 +110,31 @@ async def user_details(request: Request):
         return format_response(
             success=False,
             msg="Failed to retrieve user details",
+            statuscode=500,
+            data={"error": str(e), "traceback": tb}
+        )
+
+@router.post("/reporting_managers_list")
+async def reporting_managers_list(request: Request):
+    try:
+        request_data = await request.json()
+    except:
+        request_data = {}
+    
+    instanceClass = DataProcessor()
+    try:
+        result = instanceClass.reporting_managers_list(request_data)
+        return format_response(
+            success=True,
+            msg="Reporting managers list retrieved successfully",
+            statuscode=200,
+            data=result if isinstance(result, list) else []
+        )
+    except Exception as e:
+        tb = traceback.format_exc()
+        return format_response(
+            success=False,
+            msg="Failed to retrieve reporting managers list",
             statuscode=500,
             data={"error": str(e), "traceback": tb}
         )
