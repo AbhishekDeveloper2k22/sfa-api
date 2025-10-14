@@ -507,4 +507,49 @@ async def get_today_attendance(current_user: dict = Depends(get_current_user)):
             }
         )
 
+@router.get("/today_beat_plan")
+async def get_today_beat_plan(
+    current_user: dict = Depends(get_current_user),
+    date: Optional[str] = Query(None, description="ISO 8601 date (default: today)")
+):
+    """Get today's beat plan dashboard with metrics and progress"""
+    print("get_today_beat_plan api called")
+    try:
+        user_id = current_user.get("user_id")
+        
+        service = AppDashboardService()
+        result = service.get_today_beat_plan_dashboard(user_id, date)
+        
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to get today's beat plan"),
+                statuscode=400,
+                data={"error": result.get("error", {})}
+            )
+        
+        return format_response(
+            success=True,
+            msg="Today's beat plan retrieved successfully",
+            statuscode=200,
+            data=result.get("data", {})
+        )
+        
+    except Exception as e:
+        error_traceback = traceback.format_exc()
+        print(f"Error in get_today_beat_plan: {str(e)}")
+        print(f"Traceback: {error_traceback}")
+        return format_response(
+            success=False,
+            msg="Internal server error",
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "SERVER_ERROR",
+                    "details": str(e),
+                    "traceback": error_traceback
+                }
+            }
+        )
+
  

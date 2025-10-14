@@ -445,8 +445,8 @@ class AppOrderService:
 
             # # Get order code from database or generate if not exists (for backward compatibility)
             order_code = doc.get("order_code")
+            order_type = (doc.get("order_type") or "Primary").strip()
             if not order_code:
-                order_type = (doc.get("order_type") or "Primary").strip()
                 order_code = generate_order_code(
                     order_type=order_type,
                     order_date=doc.get("order_date", "")

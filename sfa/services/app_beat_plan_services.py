@@ -600,12 +600,11 @@ class AppBeatPlanService:
                         distance_km = distance_meters / 1000
                         customer['distance'] = format_distance(distance_meters)
                         customer['distance_km'] = round(distance_km, 1)
+                        customer['distance_formatted'] = format_distance(distance_meters)
                     else:
                         customer['distance'] = format_distance(0.0)
                         customer['distance_km'] = 0.0
-                    
-                    # UI-specific fields
-                    customer['distance_formatted'] = format_distance(distance_meters if 'distance_meters' in locals() else 0)
+                        customer['distance_formatted'] = format_distance(0.0)
                     formatted_customers.append(customer)
                 
                 # Optimize route if user coordinates are available
@@ -675,7 +674,8 @@ class AppBeatPlanService:
                     "distance_km": cust.get('distance_km', 0),
                     "routeOrder": cust.get('route_order'),
                     "checkin_status": checkin_status,
-                    "type": cust.get('type', '')
+                    "type": cust.get('type', ''),
+                    "beat_plan_id": cust.get('beat_plan_id')
                 })
 
             return {
@@ -686,8 +686,9 @@ class AppBeatPlanService:
                         "completed": coverage_completed,
                         "total": total_for_day
                     },
-                    "beat_plan_id": cust.get('beat_plan_id'),
+                    "beat_plan_id": ui_customers[0].get('beat_plan_id') if ui_customers else None,
                     "customers": ui_customers,
+                    "plans": enhanced_plans,
                     "route_optimization_enabled": user_lat is not None and user_lng is not None
                 }
             }
