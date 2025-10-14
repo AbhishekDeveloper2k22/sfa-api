@@ -10,17 +10,28 @@ router = APIRouter()
 async def add_product(request: Request, current_user: dict = Depends(get_current_user)):
     request_data = await request.json()
     request_data['created_by'] = current_user.get('user_id')
+    print("request_data", request_data)
     instance = ProductDataProcessor()
     try:
         result = instance.product_add(request_data)
+        
+        # Check if the service returned an error
+        if not result.get("success"):
+            return format_response(
+                success=False,
+                msg=result.get("message", "Failed to add product"),
+                statuscode=400,
+                data=result
+            )
+        
         return format_response(
             success=True,
-            msg="Product added successfully",
+            msg=result.get("message", "Product added successfully"),
             statuscode=200,
             data={
                 "product_id": result.get("inserted_id"),
                 "product_code": result.get("product_code")
-            } if isinstance(result, dict) else result
+            }
         )
     except Exception as e:
         tb = traceback.format_exc()

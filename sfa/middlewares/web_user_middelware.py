@@ -64,3 +64,10 @@ class DataProcessor:
         result = processor.users_data(query)
         return result
     
+    def reporting_managers_list(self, request_data):
+        """
+        Get list of market users with salesUserType "5" for reporting management
+        """
+        processor = users_tool()
+        result = processor.reporting_managers_list(request_data)
+        return result

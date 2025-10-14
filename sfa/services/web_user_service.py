@@ -188,17 +188,57 @@ class users_tool:
             del query['limit']
         if 'page' in query:
             del query['page']
-        
+
+        query['del'] = 0
+        query['employment_status'] = 'Active'                
         # Get total count of users matching the query
         total_count = self.users.count_documents(query)
         
-        # Get paginated results
-        result = list(self.users.find(query).skip(skip).limit(limit))
+        # Get paginated results sorted by created_at in descending order (latest first)
+        result = list(self.users.find(query).sort("created_at", -1).skip(skip).limit(limit))
         
-        # Convert ObjectId to string for JSON serialization
+        # Enrich each user with role name, reporting manager name, and created_by name
         for user in result:
+            # Convert ObjectId to string for JSON serialization
             if '_id' in user:
                 user['_id'] = str(user['_id'])
+            
+            # Get created_by user name (same approach as product_list)
+            created_by_id = user.get('created_by')
+            if created_by_id:
+                try:
+                    created_user = self.users.find_one({"_id": ObjectId(created_by_id)})
+                    user['created_by_name'] = created_user.get('name', 'Unknown') if created_user else 'Unknown'
+                except Exception:
+                    user['created_by_name'] = 'Unknown'
+            else:
+                user['created_by_name'] = 'Unknown'
+            
+            # Get sfa_role_type name from all_type collection (based on user_type)
+            user_type = user.get('salesUserType')
+            if user_type:
+                try:
+                    role = self.all_type.find_one({"customer_type": user_type, "type": "user"})
+                    user['user_type_name'] = role.get('name', 'Unknown') if role else 'Unknown'
+                except Exception:
+                    user['user_type_name'] = 'Unknown'
+            else:
+                user['user_type_name'] = 'Unknown'
+            
+            # Get reporting_managers names from users collection (array of IDs)
+            reporting_manager_ids = user.get('reporting_managers', [])
+            if reporting_manager_ids and isinstance(reporting_manager_ids, list):
+                manager_names = []
+                for manager_id in reporting_manager_ids:
+                    try:
+                        manager = self.users.find_one({"_id": ObjectId(manager_id)})
+                        if manager:
+                            manager_names.append(manager.get('name', 'Unknown'))
+                    except Exception:
+                        pass
+                user['reporting_managers_names'] = manager_names if manager_names else ['Unknown']
+            else:
+                user['reporting_managers_names'] = ['Unknown']
         
         # Calculate pagination info
         total_pages = (total_count + limit - 1) // limit  # Ceiling division
@@ -256,3 +296,32 @@ class users_tool:
                 "message": f"Error retrieving user details: {str(e)}",
                 "data": None
             }
+    
+    def reporting_managers_list(self, request_data):
+        """
+        Get list of market users with salesUserType "5" for reporting management
+        Returns all results for dropdown display (no pagination)
+        """
+        # Build query for salesUserType = "5", del = 0, and Active employment_status
+        query = {
+            "salesUserType": "5",
+            "del": 0,
+            "employment_status": "Active"
+        }
+        
+        # Project only required fields: _id, name, salesUserType
+        projection = {
+            "_id": 1,
+            "name": 1,
+            "salesUserType": 1
+        }
+        
+        # Get all results sorted by name in ascending order (for dropdown)
+        result = list(self.users.find(query, projection).sort("name", 1))
+        
+        # Convert ObjectId to string for JSON serialization
+        for user in result:
+            if '_id' in user:
+                user['_id'] = str(user['_id'])
+        
+        return result
