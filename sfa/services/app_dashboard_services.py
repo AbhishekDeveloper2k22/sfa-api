@@ -984,4 +984,96 @@ class AppDashboardService:
                 "success": False,
                 "message": f"Failed to get today's attendance: {str(e)}",
                 "error": {"code": "SERVER_ERROR", "details": str(e)}
-            } 
+            }
+
+    def get_today_beat_plan_dashboard(self, user_id, date=None):
+        """Get today's beat plan dashboard with metrics and progress"""
+        try:
+            # Use provided date or current date
+            if date:
+                try:
+                    target_date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                except ValueError:
+                    return {
+                        "success": False,
+                        "message": "Invalid date format",
+                        "error": {"code": "VALIDATION_ERROR", "details": "Date must be in YYYY-MM-DD format"}
+                    }
+            else:
+                target_date = datetime.now(self.timezone).strftime("%Y-%m-%d")
+
+            # Import beat plan service to get beat plan data
+            from sfa.services.app_beat_plan_services import AppBeatPlanService
+            beat_plan_service = AppBeatPlanService()
+            
+            # Get beat plan list for today
+            beat_plan_result = beat_plan_service.get_beat_plan_list(
+                user_id=user_id,
+                active_tab="today",
+                limit=50
+            )
+            
+            if not beat_plan_result.get("success"):
+                return {
+                    "success": False,
+                    "message": beat_plan_result.get("message", "Failed to get beat plan data"),
+                    "error": beat_plan_result.get("error", {})
+                }
+            
+            beat_plan_data = beat_plan_result.get("data", {})
+            plans = beat_plan_data.get("plans", [])
+            coverage = beat_plan_data.get("coverage", {})
+            
+            # Calculate metrics
+            total_stops = coverage.get("total", 0)
+            completed_stops = coverage.get("completed", 0)
+            pending_stops = total_stops - completed_stops
+            
+            # Calculate progress percentage
+            progress_percentage = round((completed_stops / total_stops) * 100, 1) if total_stops > 0 else 0
+            
+            # Build dashboard data matching the image structure
+            dashboard_data = {
+                "beat_plan": {
+                    "title": "Today's Beat Plan",
+                    "subtitle": "Track your stops",
+                    "metrics": {
+                        "total_stops": {
+                            "value": total_stops,
+                            "label": "Total Stops",
+                            "icon": "map_pin"
+                        },
+                        "completed": {
+                            "value": completed_stops,
+                            "label": "Completed",
+                            "icon": "checkmark"
+                        },
+                        "pending": {
+                            "value": pending_stops,
+                            "label": "Pending",
+                            "icon": "clock"
+                        }
+                    },
+                    "progress": {
+                        "label": "PROGRESS",
+                        "percentage": progress_percentage,
+                        "current_value": completed_stops,
+                        "total_value": total_stops
+                    },
+                    "navigation_available": True,
+                    "plans": plans,
+                    "date": target_date
+                }
+            }
+            
+            return {
+                "success": True,
+                "data": dashboard_data
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to get beat plan dashboard: {str(e)}",
+                "error": {"code": "SERVER_ERROR", "details": str(e)}
+            }
