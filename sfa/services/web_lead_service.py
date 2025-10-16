@@ -9,7 +9,7 @@ import uuid
 class lead_tool:
     def __init__(self):
         self.client_database = client1['talbros']
-        self.customers = self.client_database["customers"]
+        self.leads_collection = self.client_database["leads"]  # Use leads collection like app services
         self.current_datetime = datetime.now()
 
     def _now_fields(self):
@@ -20,54 +20,37 @@ class lead_tool:
 
     def _normalize_lead(self, request_data: dict) -> dict:
         doc = {
-            "type": "lead",
-            "customer_type": request_data.get('customer_type'),  # 1 Distributor, 2 Dealer, 3 Retailer
             "name": request_data.get('name'),
-            "company_name": request_data.get('company_name'),
-            "email": request_data.get('email'),
-            "phone": request_data.get('phone'),
             "mobile": request_data.get('mobile'),
-            "alternate_phone": request_data.get('alternate_phone'),
-            "whatsapp": request_data.get('whatsapp'),
-            "gst_number": request_data.get('gst_number'),
-            "pan_number": request_data.get('pan_number'),
-            "credit_limit": request_data.get('credit_limit'),
-            "billing_address": request_data.get('billing_address'),
-            "shipping_address": request_data.get('shipping_address'),
-            "state": request_data.get('state'),
-            "district": request_data.get('district'),
-            "city": request_data.get('city'),
+            "email": request_data.get('email'),
+            "company": request_data.get('company'),
+            "source": request_data.get('source'),
+            "status": request_data.get('status', 'new'),
+            "notes": request_data.get('notes', ''),
+            "address": request_data.get('address'),
             "pincode": request_data.get('pincode'),
-            "latitude": request_data.get('latitude'),
-            "longitude": request_data.get('longitude'),
-            "contact_person": request_data.get('contact_person'),
-            "designation": request_data.get('designation'),
-            "status": request_data.get('status', 'active'),
+            "city": request_data.get('city'),
+            "state": request_data.get('state'),
+            "country": request_data.get('country', 'India'),
             "del": 0,
         }
         return doc
 
     def _unique_query(self, request_data: dict):
-        or_conditions = []
-        if request_data.get('email'):
-            or_conditions.append({'email': request_data['email']})
-        if request_data.get('phone'):
-            or_conditions.append({'phone': request_data['phone']})
+        # Simple mobile check like app service
         if request_data.get('mobile'):
-            or_conditions.append({'mobile': request_data['mobile']})
-        if not or_conditions:
-            return None
-        return {'$or': or_conditions, 'type': 'lead', 'del': 0}
+            return {'mobile': request_data['mobile'], 'del': {'$ne': 1}}
+        return None
 
     def add_lead(self, request_data: dict) -> dict:
-        # uniqueness check (email/phone/mobile)
+        # uniqueness check (mobile)
         uq = self._unique_query(request_data)
         if uq:
-            exist = self.customers.find_one(uq)
+            exist = self.leads_collection.find_one(uq)
             if exist:
                 return {
                     "success": False,
-                    "message": "Lead already exists with same email/phone",
+                    "message": "Lead already exists",
                     "existing_id": str(exist['_id'])
                 }
 
@@ -75,7 +58,7 @@ class lead_tool:
         doc.update(self._now_fields())
         doc['created_by'] = request_data.get('created_by', 1)
 
-        res = self.customers.insert_one(doc)
+        res = self.leads_collection.insert_one(doc)
         if res.inserted_id:
             return {"success": True, "message": "Lead added", "inserted_id": str(res.inserted_id)}
         return {"success": False, "message": "Failed to add lead"}
@@ -87,11 +70,11 @@ class lead_tool:
 
         uq = self._unique_query(request_data)
         if uq:
-            exist = self.customers.find_one(uq)
+            exist = self.leads_collection.find_one(uq)
             if exist and str(exist['_id']) != str(lead_id):
                 return {
                     "success": False,
-                    "message": "Another lead exists with same email/phone",
+                    "message": "Another lead exists with same mobile",
                     "existing_id": str(exist['_id'])
                 }
 
@@ -104,7 +87,7 @@ class lead_tool:
         update_data['updated_at'] = self.current_datetime.strftime("%Y-%m-%d")
         update_data['updated_at_time'] = self.current_datetime.strftime("%H:%M:%S")
 
-        res = self.customers.update_one({"_id": ObjectId(lead_id)}, {"$set": update_data})
+        res = self.leads_collection.update_one({"_id": ObjectId(lead_id)}, {"$set": update_data})
         if res.matched_count > 0:
             return {"success": True, "message": "Lead updated", "matched_count": res.matched_count}
         return {"success": False, "message": "Lead not found"}
@@ -115,7 +98,7 @@ class lead_tool:
         if not lead_id:
             return {"success": False, "message": "Lead ID is required", "data": None}
         try:
-            doc = self.customers.find_one({"_id": ObjectId(lead_id), "type": "lead"})
+            doc = self.leads_collection.find_one({"_id": ObjectId(lead_id), "del": {"$ne": 1}})
             if not doc:
                 return {"success": False, "message": "Lead not found", "data": None}
             doc['_id'] = str(doc['_id'])
@@ -132,13 +115,15 @@ class lead_tool:
         for k in ['limit', 'page']:
             if k in query:
                 del query[k]
-        # enforce lead type and non-deleted by default
-        query['type'] = 'lead'
+        # enforce non-deleted by default like app service
         if 'del' not in query:
-            query['del'] = 0
+            query['del'] = {'$ne': 1}
+        
+        print("query", query)
 
-        total_count = self.customers.count_documents(query)
-        items = list(self.customers.find(query).skip(skip).limit(limit))
+        total_count = self.leads_collection.count_documents(query)
+        items = list(self.leads_collection.find(query).skip(skip).limit(limit))
+        print("items", items)
         for it in items:
             it['_id'] = str(it['_id'])
 
@@ -159,13 +144,13 @@ class lead_tool:
         if not lead_id:
             return {"success": False, "message": "Lead ID is required"}
         try:
-            doc = self.customers.find_one({"_id": ObjectId(lead_id), "type": "lead"})
+            doc = self.leads_collection.find_one({"_id": ObjectId(lead_id), "del": {"$ne": 1}})
             if not doc:
                 return {"success": False, "message": "Lead not found"}
         except Exception as e:
             return {"success": False, "message": f"Invalid lead ID: {e}"}
 
-        base_dir = os.path.join("uploads", "sfa", "leads")
+        base_dir = os.path.join("uploads", "sfa_uploads", "leads")
         os.makedirs(base_dir, exist_ok=True)
 
         original = upload_file.filename or "file"
@@ -176,7 +161,7 @@ class lead_tool:
         with open(file_path, 'wb') as f:
             f.write(upload_file.file.read())
 
-        res = self.customers.update_one({"_id": ObjectId(lead_id)}, {"$set": {
+        res = self.leads_collection.update_one({"_id": ObjectId(lead_id)}, {"$set": {
             "image": unique_name,
             "image_updated_at": self.current_datetime.strftime("%Y-%m-%d %H:%M:%S")
         }})
