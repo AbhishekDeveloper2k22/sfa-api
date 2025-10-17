@@ -432,7 +432,13 @@ class AppDashboardService:
                 location["address"] = address
 
             # Calculate working hours
-            punch_in_time = datetime.fromisoformat(existing_attendance['punch_in_time'])
+            # Combine punch_in_at and punch_in_time to create proper datetime
+            punch_in_date = existing_attendance['punch_in_at']  # Format: YYYY-MM-DD
+            punch_in_time_str = existing_attendance['punch_in_time']  # Format: HH:MM:SS
+            punch_in_datetime_str = f"{punch_in_date}T{punch_in_time_str}"
+            punch_in_time = datetime.fromisoformat(punch_in_datetime_str)
+            # Convert to timezone-aware datetime
+            punch_in_time = self.timezone.localize(punch_in_time)
             working_hours = (punch_out_datetime - punch_in_time).total_seconds() / 3600
 
             # Update attendance record with punch out
