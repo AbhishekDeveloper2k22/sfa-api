@@ -22,9 +22,13 @@ class Settings(BaseSettings):
     DB1_PASSWORD: str
     DB1_HOST: str
     DB1_AUTH_SOURCE: str
+    DB1_NAME: str
 
     # JWT configurations
     JWT_SECRET: str
+    
+    # AI/ML configurations
+    GEMINI_API_KEY: str
 
     # Domain configuration
     DOMAIN: str
