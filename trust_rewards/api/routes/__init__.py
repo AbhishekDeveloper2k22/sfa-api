@@ -5,6 +5,7 @@ from .web_skilled_worker_module import router as web_skilled_worker_module
 from .web_coupon_module import router as web_coupon_module
 from .web_master_module import router as web_master_module
 from .web_redeem_request_module import router as web_redeem_request_module
+from .web_location_module import router as web_location_module
 from .app_user_auth_module import router as app_user_auth_module
 from .app_coupon_module import router as app_coupon_module
 from .app_master_module import router as app_master_module
@@ -34,6 +35,7 @@ router.include_router(web_skilled_worker_module, prefix="/api/web/skilled_worker
 router.include_router(web_coupon_module, prefix="/api/web/coupons")
 router.include_router(web_master_module, prefix="/api/web/master")
 router.include_router(web_redeem_request_module, prefix="/api/web/redeem_requests")
+router.include_router(web_location_module, prefix="/api/web/location")
 
 
 
