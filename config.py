@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     
     # AI/ML configurations
     GEMINI_API_KEY: str
+    MODEL_PROVIDER: str = "hf"  # Model provider: gemini, hf (HuggingFace), local
+    HUGGINGFACE_API_KEY: str = ""  # HuggingFace API key (required if MODEL_PROVIDER=hf)
+    HUGGINGFACE_MODEL: str = ""  # HuggingFace model name
 
     # Domain configuration
     DOMAIN: str
