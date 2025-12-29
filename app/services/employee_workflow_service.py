@@ -111,8 +111,6 @@ class EmployeeWorkflowService:
             section_key: section_payload,
             "step_completed": max(draft.get("step_completed", 0), step_number),
             "next_step": next_step,
-            "updated_at": now,
-            "updated_by": user_id,
         }
         updates.update(build_audit_fields(prefix="updated", by=user_id))
         self._push_history(
@@ -201,11 +199,9 @@ class EmployeeWorkflowService:
             "status": "active",
             "version": 1,
             "etag": etag,
-            "created_by": draft.get("created_by"),
-            "created_at": draft.get("created_at", now),
-            "updated_at": now,
-            "updated_by": user_id,
         }
+        employee_doc.update(build_audit_fields(prefix="created", by=draft.get("created_by") or user_id))
+        employee_doc.update(build_audit_fields(prefix="updated", by=user_id))
         insert_result = employees.insert_one(employee_doc)
         employee_id = str(insert_result.inserted_id)
 
@@ -340,9 +336,8 @@ class EmployeeWorkflowService:
         updates = {
             "permission_profile_id": role_id,
             "permission_profile_name": role_name,
-            "updated_at": self._now(),
-            "updated_by": actor,
         }
+        updates.update(build_audit_fields(prefix="updated", by=actor))
         modified = self._update_many_employees(tenant_id, employee_ids, updates)
         return {"updated": modified}
 
@@ -359,9 +354,8 @@ class EmployeeWorkflowService:
             "employment_status": "suspended",
             "suspension_reason": reason,
             "suspension_effective_date": effective_date,
-            "updated_at": self._now(),
-            "updated_by": actor,
         }
+        updates.update(build_audit_fields(prefix="updated", by=actor))
         modified = self._update_many_employees(tenant_id, employee_ids, updates)
         return {"updated": modified}
 
@@ -378,9 +372,8 @@ class EmployeeWorkflowService:
             "employment_status": "terminated",
             "termination_reason": reason,
             "termination_date": last_working_day,
-            "updated_at": self._now(),
-            "updated_by": actor,
         }
+        updates.update(build_audit_fields(prefix="updated", by=actor))
         modified = self._update_many_employees(tenant_id, employee_ids, updates)
         return {"updated": modified}
 
@@ -394,9 +387,8 @@ class EmployeeWorkflowService:
         updates = {
             "ess_enabled": bool(enable),
             "ess_activated_at": self._now() if enable else None,
-            "updated_at": self._now(),
-            "updated_by": actor,
         }
+        updates.update(build_audit_fields(prefix="updated", by=actor))
         modified = self._update_many_employees(tenant_id, employee_ids, updates)
         return {"updated": modified}
 
@@ -420,8 +412,7 @@ class EmployeeWorkflowService:
             {"_id": {"$in": object_ids}},
             {
                 "$set": {
-                    "updated_at": self._now(),
-                    "updated_by": actor,
+                    **build_audit_fields(prefix="updated", by=actor),
                 },
                 "$addToSet": {"tags": tag_value},
             },
@@ -458,9 +449,8 @@ class EmployeeWorkflowService:
             "employment_status": normalized_status,
             "status_reason": reason,
             "status_effective_date": effective_date,
-            "updated_at": self._now(),
-            "updated_by": actor,
         }
+        updates.update(build_audit_fields(prefix="updated", by=actor))
         employees.update_one({"_id": doc["_id"]}, {"$set": updates})
         doc.update(updates)
         return self._sanitize_employee(doc)
@@ -529,9 +519,8 @@ class EmployeeWorkflowService:
             "status": payload.get("status", doc.get("status", "active")),
             "version": doc.get("version", 1) + 1,
             "etag": new_etag,
-            "updated_at": now,
-            "updated_by": actor,
         }
+        updates.update(build_audit_fields(prefix="updated", by=actor))
         employees.update_one({"_id": doc["_id"]}, {"$set": updates})
         doc.update(updates)
         return self._sanitize_employee(doc)
@@ -556,9 +545,8 @@ class EmployeeWorkflowService:
             section_key: section_payload,
             "version": doc.get("version", 1) + 1,
             "etag": new_etag,
-            "updated_at": now,
-            "updated_by": actor,
         }
+        updates.update(build_audit_fields(prefix="updated", by=actor))
         employees.update_one({"_id": doc["_id"]}, {"$set": updates})
         doc.update(updates)
         return self._sanitize_employee(doc)
@@ -663,6 +651,7 @@ class EmployeeWorkflowService:
             "created_at": now,
             "created_by": user_id,
         }
+        record.update(build_audit_fields(prefix="created", by=user_id))
         uploads.insert_one(record)
         return {
             "upload_id": upload_id,
