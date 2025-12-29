@@ -31,10 +31,13 @@ class UserAuthService(BaseAuthService):
 
     def create_jwt_token(self, user):
         payload = {
-            'user_id': str(user['_id']),
-            'email': user['email'],
-            'role': user.get('role', 'Admin'),
-            'exp': datetime.utcnow() + timedelta(minutes=JWT_EXP_DELTA_MINUTES)
+            "user_id": str(user["_id"]),
+            "email": user["email"],
+            "name": user.get("full_name", ""),
+            "tenant_id": user.get("tenant_id"),
+            "role": user.get("role", "Admin"),
+            "status": user.get("status", "active"),
+            "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_DELTA_MINUTES),
         }
         token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
         return token
@@ -44,10 +47,20 @@ class UserAuthService(BaseAuthService):
         if not user:
             return None
         token = self.create_jwt_token(user)
-        user_info = {
-            "id": str(user['_id']),
-            "name": user.get('full_name', ''),
-            "email": user['email'],
-            "role": user.get('role', 'Admin')
+        user_info = self._serialize_user(user)
+        return {"user": user_info, "token": token}
+
+    def _serialize_user(self, user):
+        """Return sanitized user profile for API responses."""
+        return {
+            "id": str(user["_id"]),
+            "full_name": user.get("full_name", ""),
+            "email": user.get("email"),
+            "contact_number": user.get("contact_number"),
+            "role": user.get("role", "Admin"),
+            "tenant_id": user.get("tenant_id"),
+            "status": user.get("status", "active"),
+            "created_at": user.get("created_at"),
+            "created_time": user.get("created_time"),
+            "created_by": user.get("created_by"),
         }
-        return {"user": user_info, "token": token} 
