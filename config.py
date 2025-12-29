@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     HUGGINGFACE_API_KEY: str = ""  # HuggingFace API key (required if MODEL_PROVIDER=hf)
     HUGGINGFACE_MODEL: str = ""  # HuggingFace model name
 
+    DEEPSEEK_API_KEY: str
+
     # Domain configuration
     DOMAIN: str
 
