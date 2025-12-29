@@ -10,6 +10,7 @@ from app.api.routes import attendance_module
 from app.api.routes import app_ai_agent_module
 from app.api.routes import onboarding_user_module
 from app.api.routes import employee_config_module
+from app.api.routes import employee_workflow_module
 from app.api.routes import attendance_config_module
 from app.api.routes import leave_config_module
 from app.api.routes import payroll_config_module
@@ -34,6 +35,7 @@ router.include_router(
     tags=["tenant-onboarding"],
 )
 router.include_router(employee_config_module.router, tags=["employee-config"])
+router.include_router(employee_workflow_module.router, tags=["employee-workflow"])
 router.include_router(attendance_config_module.router, tags=["attendance-config"])
 router.include_router(leave_config_module.router, tags=["leave-config"])
 router.include_router(payroll_config_module.router, tags=["payroll-config"])
