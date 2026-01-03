@@ -271,7 +271,7 @@ class EmployeeWorkflowService:
             .find({"del": {"$ne": 1}})
             .sort("name", 1)
         )
-        locations = list(tenant_db["tenant_locations"].find({}).sort("name", 1))
+        # locations = list(tenant_db["tenant_locations"].find({}).sort("name", 1))
         roles = list(tenant_db["permission_roles"].find({}).sort("name", 1))
         tags = [
             tag
@@ -293,10 +293,10 @@ class EmployeeWorkflowService:
                 {"id": str(doc.get("_id")), "name": doc.get("name"), "department": doc.get("department")}
                 for doc in designations
             ],
-            "locations": [
-                {"id": str(doc.get("_id")), "name": doc.get("name")}
-                for doc in locations
-            ],
+            # "locations": [
+            #     {"id": str(doc.get("_id")), "name": doc.get("name")}
+            #     for doc in locations
+            # ],
             "roles": [
                 {"id": str(doc.get("_id")), "name": doc.get("name"), "code": doc.get("code")}
                 for doc in roles
@@ -570,8 +570,8 @@ class EmployeeWorkflowService:
         tenant_db = self._tenant_db(tenant_id)
         mapping = {
             "departments": ("tenant_departments", {"del": {"$ne": 1}}),
-            "locations": ("tenant_locations", {}),
-            "shifts": ("tenant_shifts", {}),
+            # "locations": ("tenant_locations", {}),
+            # "shifts": ("tenant_shifts", {}),
             "designations": ("tenant_designations", {"del": {"$ne": 1}}),
             "salary-structures": ("salary_structures", {}),
             "roles": ("permission_roles", {}),
