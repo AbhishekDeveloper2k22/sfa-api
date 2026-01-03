@@ -7,6 +7,16 @@ from app.api.routes import app_attendance_module
 from app.api.routes import app_request_module
 from app.api.routes import app_sidebar_module
 from app.api.routes import attendance_module
+from app.api.routes import leave_module
+from app.api.routes import advance_module
+from app.api.routes import payroll_module
+from app.api.routes import expense_module
+from app.api.routes import asset_module
+from app.api.routes import document_module
+from app.api.routes import policy_module
+from app.api.routes import announcement_module
+from app.api.routes import celebration_module
+from app.api.routes import holiday_module
 from app.api.routes import app_ai_agent_module
 from app.api.routes import onboarding_user_module
 from app.api.routes import employee_config_module
@@ -29,6 +39,16 @@ router.include_router(
 router.include_router(employee_module.router, prefix="/api/web/employees")
 router.include_router(user_auth_module.router, prefix="/api/web/auth")
 router.include_router(attendance_module.router, prefix="/api/web/attendance")
+router.include_router(leave_module.router, prefix="/api/web/leaves")
+router.include_router(advance_module.router, prefix="/api/web/advances")
+router.include_router(payroll_module.router, prefix="/api/web")
+router.include_router(expense_module.router, prefix="/api/web/expense")
+router.include_router(asset_module.router, prefix="/api/web/asset")
+router.include_router(document_module.router, prefix="/api/web/document")
+router.include_router(policy_module.router, prefix="/api/web/policy")
+router.include_router(announcement_module.router, prefix="/api/web/announcement")
+router.include_router(celebration_module.router, prefix="/api/web/celebration")
+router.include_router(holiday_module.router, prefix="/api/web/holiday")
 router.include_router(
     onboarding_user_module.router,
     prefix="/api/web/onboarding",

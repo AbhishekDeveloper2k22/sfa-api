@@ -1,390 +1,417 @@
-from fastapi import APIRouter, Request, HTTPException, Depends, Query
-from app.services.attendance_services import AttendanceService
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
+from typing import Optional, List
+
+from app.services.attendance_service import (
+    AttendanceError,
+    AttendanceService,
+)
+from app.utils.auth_utils import get_request_payload
 from app.utils.response import format_response
-from typing import Optional
-import jwt
-from datetime import datetime, timedelta
-import pytz
 
-router = APIRouter()
+# Note: Prefix is just /api/v1 usually, but here based on docs:
+# Docs say Base URL: /api/v1
+# Endpoints are like /attendance/live
+# So router prefix can be /api/v1
+# However, the user file `employee_config_module.py` has prefix `/api/web/employee_config`.
+# I should stick to what `attendance_api_documentation.md` says: `/api/v1`.
+# But usually in this project structure, it might be scoped. 
+# I will use `/api/v1` as requested in docs, but I should check if I need to register this router in `index.py`. 
+# For now I will create the file.
 
-# JWT Configuration
-import os
-from dotenv import load_dotenv
+router = APIRouter(tags=["attendance"])
+service = AttendanceService()
 
-load_dotenv()
 
-SECRET_KEY = os.getenv('JWT_SECRET')
-ALGORITHM = "HS256"
+def get_current_user(request: Request):
+    return get_request_payload(request)
 
-def verify_token(token: str):
-    """Verify JWT token"""
+
+def tenant_context(payload: dict):
+    tenant_id = payload.get("tenant_id")
+    user_id = payload.get("user_id")
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="No tenant associated with token")
+    # user_id might be None for machine tokens, but usually required
+    return tenant_id, user_id
+
+
+def handle_service_call(fn):
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.JWTError:
-        return None
+        return fn()
+    except AttendanceError as exc:
+        return format_response(
+            success=False,
+            msg=exc.args[0],
+            statuscode=exc.status_code,
+            data={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.args[0],
+                    "details": exc.errors,
+                }
+            },
+        )
+    except Exception as exc:
+        return format_response(
+            success=False,
+            msg=str(exc),
+            statuscode=500,
+            data={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                }
+            },
+        )
 
-async def get_current_user(request: Request):
-    """Get current authenticated user"""
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+# ------------------------------------------------------------------
+# 1. Live Attendance APIs
+# ------------------------------------------------------------------
+@router.get("/live")
+async def get_live_attendance(
+    request: Request,
+    q: Optional[str] = None,
+    status: Optional[str] = None,
+    department: Optional[str] = None,
+    shift_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    tenant_id, _ = tenant_context(current_user)
+    query_params = {k: v for k, v in locals().items() if k in ["q", "status", "department", "shift_id"] and v is not None}
     
-    token = auth_header.split(" ")[1]
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    return payload
+    def action():
+        data = service.get_live_attendance(tenant_id, query_params)
+        return format_response(success=True, statuscode=200, data=data)
 
-@router.post("/attendance-list")
-async def get_attendance_list(
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 2. Daily Attendance APIs
+# ------------------------------------------------------------------
+@router.get("/daily")
+async def get_daily_attendance(
+    request: Request,
+    employee_id: Optional[str] = None,
+    date: Optional[str] = None,
+    from_date: Optional[str] = Query(None, alias="from_date"),
+    to_date: Optional[str] = Query(None, alias="to_date"),
+    status: Optional[str] = None,
+    department: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
+    current_user: dict = Depends(get_current_user)
+):
+    tenant_id, _ = tenant_context(current_user)
+    query_params = {
+        "employee_id": employee_id,
+        "date": date,
+        "from_date": from_date,
+        "to_date": to_date,
+        "status": status,
+        "department": department,
+        "page": page,
+        "page_size": page_size
+    }
+    # Remove None to avoid filtering by None
+    query_params = {k: v for k, v in query_params.items() if v is not None}
+
+    def action():
+        data = service.get_daily_attendance(tenant_id, query_params)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 4. Manual/Correction Requests APIs
+# ------------------------------------------------------------------
+@router.get("/manual-requests")
+async def get_manual_requests(
+    request: Request,
+    employee_id: Optional[str] = None,
+    status: Optional[str] = None,
+    request_type: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
+    current_user: dict = Depends(get_current_user)
+):
+    tenant_id, _ = tenant_context(current_user)
+    query_params = {
+        "employee_id": employee_id,
+        "status": status,
+        "request_type": request_type,
+        "page": page,
+        "page_size": page_size
+    }
+    query_params = {k: v for k, v in query_params.items() if v is not None}
+
+    def action():
+        data = service.get_manual_requests(tenant_id, query_params)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/manual-requests")
+async def create_manual_request(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.create_manual_request(tenant_id, payload, actor)
+        return format_response(success=True, statuscode=201, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/manual-requests/{requestId}/action")
+async def action_manual_request(requestId: str, request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.action_manual_request(tenant_id, requestId, payload, actor)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 5. Overtime (OT) Requests APIs
+# ------------------------------------------------------------------
+@router.get("/ot-requests")
+async def get_ot_requests(
+    request: Request,
+    employee_id: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
+    current_user: dict = Depends(get_current_user)
+):
+    tenant_id, _ = tenant_context(current_user)
+    query_params = {
+        "employee_id": employee_id,
+        "status": status,
+        "page": page,
+        "page_size": page_size
+    }
+    query_params = {k: v for k, v in query_params.items() if v is not None}
+
+    def action():
+        data = service.get_ot_requests(tenant_id, query_params)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/ot-requests")
+async def create_ot_request(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.create_ot_request(tenant_id, payload, actor)
+        return format_response(success=True, statuscode=201, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/ot-requests/{requestId}/action")
+async def action_ot_request(requestId: str, request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.action_ot_request(tenant_id, requestId, payload, actor)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/ot-requests/bulk-approve")
+async def bulk_approve_ot_requests(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.bulk_approve_ot_requests(tenant_id, payload, actor)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 6. Punch/Event APIs
+# ------------------------------------------------------------------
+@router.post("/punch")
+async def record_punch(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, _ = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.record_punch(tenant_id, payload)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.get("/events")
+async def get_events(
+    request: Request,
+    employee_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    tenant_id, _ = tenant_context(current_user)
+    query_params = {"employee_id": employee_id}
+    query_params = {k: v for k, v in query_params.items() if v is not None}
+
+    def action():
+        data = service.get_events(tenant_id, query_params)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 7. Shift APIs
+# ------------------------------------------------------------------
+# Note: Shifts and Rosters in the doc were /shifts and /rosters.
+# Under /api/web/attendance prefix, these become /attendance/shifts etc.
+# If they should be root level, we would need a different router setup.
+# I will assume they are grouped under attendance here.
+
+@router.get("/shifts")
+async def get_shifts(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, _ = tenant_context(current_user)
+
+    def action():
+        data = service.get_shifts(tenant_id)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.get("/shifts/{shiftId}")
+async def get_shift(shiftId: str, request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, _ = tenant_context(current_user)
+
+    def action():
+        data = service.get_shift(tenant_id, shiftId)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/shifts")
+async def create_shift(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.create_shift(tenant_id, payload, actor)
+        return format_response(success=True, statuscode=201, data=data)
+
+    return handle_service_call(action)
+
+@router.put("/shifts/{shiftId}")
+async def update_shift(shiftId: str, request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.update_shift(tenant_id, shiftId, payload, actor)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 8. Roster APIs
+# ------------------------------------------------------------------
+@router.get("/rosters")
+async def get_rosters(
+    request: Request,
+    employee_id: Optional[str] = None,
+    shift_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    tenant_id, _ = tenant_context(current_user)
+    query_params = {"employee_id": employee_id, "shift_id": shift_id}
+    query_params = {k: v for k, v in query_params.items() if v is not None}
+
+    def action():
+        data = service.get_rosters(tenant_id, query_params)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/rosters/assign")
+async def assign_roster(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.assign_roster(tenant_id, payload, actor)
+        return format_response(success=True, statuscode=201, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/rosters/bulk-assign")
+async def bulk_assign_roster(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.bulk_assign_roster(tenant_id, payload, actor)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.delete("/rosters/{assignmentId}")
+async def delete_roster_assignment(assignmentId: str, current_user: dict = Depends(get_current_user)):
+    tenant_id, _ = tenant_context(current_user)
+
+    def action():
+        data = service.delete_roster_assignment(tenant_id, assignmentId)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 9. Device & Geofence APIs
+# ------------------------------------------------------------------
+@router.get("/devices")
+async def get_devices(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, _ = tenant_context(current_user)
+
+    def action():
+        data = service.get_devices(tenant_id)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+@router.post("/devices")
+async def register_device(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, actor = tenant_context(current_user)
+    payload = await request.json()
+
+    def action():
+        data = service.register_device(tenant_id, payload, actor)
+        return format_response(success=True, statuscode=201, data=data)
+
+    return handle_service_call(action)
+
+@router.get("/geofences")
+async def get_geofences(request: Request, current_user: dict = Depends(get_current_user)):
+    tenant_id, _ = tenant_context(current_user)
+
+    def action():
+        data = service.get_geofences(tenant_id)
+        return format_response(success=True, statuscode=200, data=data)
+
+    return handle_service_call(action)
+
+# ------------------------------------------------------------------
+# 3. Monthly Attendance APIs
+# ------------------------------------------------------------------
+@router.get("/{employeeId}")
+async def get_monthly_attendance(
+    employeeId: str,
+    month: str,
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get attendance list for admin with filtering options for all employees"""
-    try:
-        # Get request body
-        body = await request.json()
-        
-        # Extract parameters from request body
-        page = body.get("page", 1)
-        limit = body.get("limit", 20)
-        month = body.get("month")  # Format: "January" or "January 2025"
-        year = body.get("year")    # Format: 2025
-        date = body.get("date")    # Format: "2025-01-15" - specific date filter
-        status = body.get("status", "all")  # all, present, absent, late, leave, wfh, incomplete
-        employee_id = body.get("employee_id")  # Specific employee ID
-        department = body.get("department")  # Department filter
-        search = body.get("search")  # Search by name, email, or employee ID
-        
-        # Validate parameters
-        if page < 1:
-            page = 1
-        if limit < 1 or limit > 100:
-            limit = 20
-            
-        if status not in ["all", "present", "absent", "late", "leave", "wfh", "incomplete"]:
-            return format_response(
-                success=False,
-                msg="Invalid status parameter",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "Status must be 'all', 'present', 'absent', 'late', 'leave', 'wfh', or 'incomplete'"
-                    }
-                }
-            )
-        
-        # Validate month and year if provided
-        if month and year:
-            try:
-                # Validate year
-                year = int(year)
-                if year < 2020 or year > 2030:
-                    return format_response(
-                        success=False,
-                        msg="Invalid year",
-                        statuscode=400,
-                        data={
-                            "error": {
-                                "code": "VALIDATION_ERROR",
-                                "details": "Year must be between 2020 and 2030"
-                            }
-                        }
-                    )
-                
-                # Validate month format
-                month_names = [
-                    "January", "February", "March", "April", "May", "June",
-                    "July", "August", "September", "October", "November", "December"
-                ]
-                
-                # Check if month is just name or "Month Year" format
-                if month not in month_names and not any(month.startswith(m) for m in month_names):
-                    return format_response(
-                        success=False,
-                        msg="Invalid month format",
-                        statuscode=400,
-                        data={
-                            "error": {
-                                "code": "VALIDATION_ERROR",
-                                "details": "Month must be a valid month name (e.g., 'January' or 'January 2025')"
-                            }
-                        }
-                    )
-                    
-            except ValueError:
-                return format_response(
-                    success=False,
-                    msg="Invalid year format",
-                    statuscode=400,
-                    data={
-                        "error": {
-                            "code": "VALIDATION_ERROR",
-                            "details": "Year must be a valid number"
-                        }
-                    }
-                )
-        
-        # Validate specific date if provided
-        if date:
-            try:
-                datetime.strptime(date, "%Y-%m-%d")
-            except ValueError:
-                return format_response(
-                    success=False,
-                    msg="Invalid date format",
-                    statuscode=400,
-                    data={
-                        "error": {
-                            "code": "VALIDATION_ERROR",
-                            "details": "Date must be in YYYY-MM-DD format"
-                        }
-                    }
-                )
-        
-        service = AttendanceService()
-        result = service.get_attendance_list_admin(
-            page=page,
-            limit=limit,
-            month=month,
-            year=year,
-            date_filter=date,
-            status=status,
-            employee_id=employee_id,
-            department=department,
-            search=search
-        )
-        
-        if not result.get("success"):
-            return format_response(
-                success=False,
-                msg=result.get("message", "Failed to get attendance list"),
-                statuscode=400,
-                data={"error": result.get("error", {})}
-            )
-        
-        return format_response(
-            success=True,
-            msg="Attendance list retrieved successfully",
-            statuscode=200,
-            data=result.get("data", {})
-        )
-        
-    except Exception as e:
-        return format_response(
-            success=False,
-            msg="Internal server error",
-            statuscode=500,
-            data={
-                "error": {
-                    "code": "SERVER_ERROR",
-                    "details": "An unexpected error occurred"
-                }
-            }
-        )
+    tenant_id, _ = tenant_context(current_user)
 
-@router.get("/employee-summary/{employee_id}")
-async def get_employee_attendance_summary(
-    employee_id: str,
-    month: Optional[str] = Query(None, description="Month name (e.g., 'January')"),
-    year: Optional[int] = Query(None, description="Year (e.g., 2025)"),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get attendance summary for a specific employee"""
-    try:
-        # Validate employee_id
-        if not employee_id:
-            return format_response(
-                success=False,
-                msg="Employee ID is required",
-                statuscode=400,
-                data={
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "details": "Employee ID is required"
-                    }
-                }
-            )
-        
-        # Validate month and year if provided
-        if month and year:
-            try:
-                # Validate year
-                if year < 2020 or year > 2030:
-                    return format_response(
-                        success=False,
-                        msg="Invalid year",
-                        statuscode=400,
-                        data={
-                            "error": {
-                                "code": "VALIDATION_ERROR",
-                                "details": "Year must be between 2020 and 2030"
-                            }
-                        }
-                    )
-                
-                # Validate month format
-                month_names = [
-                    "January", "February", "March", "April", "May", "June",
-                    "July", "August", "September", "October", "November", "December"
-                ]
-                
-                if month not in month_names and not any(month.startswith(m) for m in month_names):
-                    return format_response(
-                        success=False,
-                        msg="Invalid month format",
-                        statuscode=400,
-                        data={
-                            "error": {
-                                "code": "VALIDATION_ERROR",
-                                "details": "Month must be a valid month name (e.g., 'January' or 'January 2025')"
-                            }
-                        }
-                    )
-                    
-            except ValueError:
-                return format_response(
-                    success=False,
-                    msg="Invalid year format",
-                    statuscode=400,
-                    data={
-                        "error": {
-                            "code": "VALIDATION_ERROR",
-                            "details": "Year must be a valid number"
-                        }
-                    }
-                )
-        
-        service = AttendanceService()
-        result = service.get_employee_attendance_summary(
-            employee_id=employee_id,
-            month=month,
-            year=year
-        )
-        
-        if not result.get("success"):
-            return format_response(
-                success=False,
-                msg=result.get("message", "Failed to get employee attendance summary"),
-                statuscode=400,
-                data={"error": result.get("error", {})}
-            )
-        
-        return format_response(
-            success=True,
-            msg="Employee attendance summary retrieved successfully",
-            statuscode=200,
-            data=result.get("data", {})
-        )
-        
-    except Exception as e:
-        return format_response(
-            success=False,
-            msg="Internal server error",
-            statuscode=500,
-            data={
-                "error": {
-                    "code": "SERVER_ERROR",
-                    "details": "An unexpected error occurred"
-                }
-            }
-        )
+    def action():
+        data = service.get_monthly_attendance(tenant_id, employeeId, month)
+        return format_response(success=True, statuscode=200, data=data)
 
-@router.get("/department-summary")
-async def get_department_attendance_summary(
-    department: Optional[str] = Query(None, description="Department name"),
-    month: Optional[str] = Query(None, description="Month name (e.g., 'January')"),
-    year: Optional[int] = Query(None, description="Year (e.g., 2025)"),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get attendance summary for a department or all departments"""
-    try:
-        # Validate month and year if provided
-        if month and year:
-            try:
-                # Validate year
-                if year < 2020 or year > 2030:
-                    return format_response(
-                        success=False,
-                        msg="Invalid year",
-                        statuscode=400,
-                        data={
-                            "error": {
-                                "code": "VALIDATION_ERROR",
-                                "details": "Year must be between 2020 and 2030"
-                            }
-                        }
-                    )
-                
-                # Validate month format
-                month_names = [
-                    "January", "February", "March", "April", "May", "June",
-                    "July", "August", "September", "October", "November", "December"
-                ]
-                
-                if month not in month_names and not any(month.startswith(m) for m in month_names):
-                    return format_response(
-                        success=False,
-                        msg="Invalid month format",
-                        statuscode=400,
-                        data={
-                            "error": {
-                                "code": "VALIDATION_ERROR",
-                                "details": "Month must be a valid month name (e.g., 'January' or 'January 2025')"
-                            }
-                        }
-                    )
-                    
-            except ValueError:
-                return format_response(
-                    success=False,
-                    msg="Invalid year format",
-                    statuscode=400,
-                    data={
-                        "error": {
-                            "code": "VALIDATION_ERROR",
-                            "details": "Year must be a valid number"
-                        }
-                    }
-                )
-        
-        service = AttendanceService()
-        result = service.get_department_attendance_summary(
-            department=department,
-            month=month,
-            year=year
-        )
-        
-        if not result.get("success"):
-            return format_response(
-                success=False,
-                msg=result.get("message", "Failed to get department attendance summary"),
-                statuscode=400,
-                data={"error": result.get("error", {})}
-            )
-        
-        return format_response(
-            success=True,
-            msg="Department attendance summary retrieved successfully",
-            statuscode=200,
-            data=result.get("data", {})
-        )
-        
-    except Exception as e:
-        return format_response(
-            success=False,
-            msg="Internal server error",
-            statuscode=500,
-            data={
-                "error": {
-                    "code": "SERVER_ERROR",
-                    "details": "An unexpected error occurred"
-                }
-            }
-        )
+    return handle_service_call(action)
