@@ -24,7 +24,16 @@ class EmployeeService(BaseService):
         self.current_date = self.current_datetime_in_tz.date()
 
     def validate_and_insert_user(self, user_data):
-        existing_user = self.user_collection.find_one({"$or": [{"email": user_data['email']}, {"mobile_no": user_data['mobile_no']}]})
+        or_conditions = []
+        if user_data.get('email'):
+            or_conditions.append({"email": user_data['email']})
+        if user_data.get('mobile_no'):
+            or_conditions.append({"mobile_no": user_data['mobile_no']})
+
+        existing_user = None
+        if or_conditions:
+            existing_user = self.user_collection.find_one({"$or": or_conditions})
+            
         if existing_user:
             return {
                 "success": False,
