@@ -1,6 +1,7 @@
 from bson import ObjectId
 from datetime import datetime
 from app.database import client1
+from app.services.payroll_config_service import PayrollConfigError, PayrollConfigService
 from dotenv import load_dotenv
 from app.utils.response import format_response
 import pytz
@@ -17,6 +18,7 @@ class BaseService:
 class EmployeeService(BaseService):
     def __init__(self):
         super().__init__()
+        self.payroll_config_service = PayrollConfigService()
 
     def _initialize_request(self, request):
         india_tz = pytz.timezone('Asia/Kolkata')
@@ -461,3 +463,178 @@ class EmployeeService(BaseService):
             if pwd and not bcrypt_regex.match(pwd):
                 hashed = bcrypt.hash(pwd)
                 self.user_collection.update_one({'_id': user['_id']}, {'$set': {'password': hashed}})
+
+    # ------------------------------------------------------------------
+    # CTC breakdown using payroll configuration
+    # ------------------------------------------------------------------
+    def calculate_ctc_breakdown(self, tenant_id: str, annual_ctc: float):
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        try:
+            annual_ctc_value = float(annual_ctc)
+        except (TypeError, ValueError):
+            raise ValueError("annual_ctc must be a number")
+        if annual_ctc_value <= 0:
+            raise ValueError("annual_ctc must be greater than zero")
+
+        config = self.payroll_config_service.get_config(tenant_id)
+        components = config.get("salary_components", [])
+        statutory = config.get("statutory", {})
+
+        monthly_ctc = annual_ctc_value / 12
+        earnings = []
+        deductions = []
+        employer_contributions = []
+        total_earnings_monthly = 0.0
+        total_deductions_monthly = 0.0
+
+        def round2(val):
+            return round(val, 2)
+
+        pf_cfg = (statutory or {}).get("pf", {})
+        esi_cfg = (statutory or {}).get("esi", {})
+        pf_enabled = bool(pf_cfg.get("enabled"))
+        esi_enabled = bool(esi_cfg.get("enabled"))
+
+        # First, compute earnings and explicit deduction components (excluding statutory duplicates)
+        basic_monthly = 0.0
+        for comp in components:
+            pct = float(comp.get("percentage", 0))
+            amount_monthly = monthly_ctc * (pct / 100.0)
+            entry = {
+                "code": comp.get("code"),
+                "name": comp.get("name"),
+                "type": comp.get("type"),
+                "percentage": pct,
+                "monthly_amount": round2(amount_monthly),
+                "annual_amount": round2(amount_monthly * 12),
+                "description": comp.get("description"),
+            }
+            comp_type = comp.get("type")
+            code = (comp.get("code") or "").upper()
+
+            # Skip PF/ESI deductions if statutory rules are enabled to avoid double counting
+            if comp_type == "deduction":
+                if pf_enabled and code in {"PF_EMP", "PF_EMPR", "PF_EMPLOYER", "PF_EMPLOYEE"}:
+                    continue
+                if esi_enabled and code in {"ESI_EMP", "ESI_EMPR", "ESI_EMPLOYER", "ESI_EMPLOYEE"}:
+                    continue
+
+            if comp_type == "earning":
+                earnings.append(entry)
+                total_earnings_monthly += amount_monthly
+                if code == "BASIC":
+                    basic_monthly = amount_monthly
+            else:
+                deductions.append(entry)
+                total_deductions_monthly += amount_monthly
+
+        # Statutory PF (employee + employer both deducted as per request)
+        if pf_enabled:
+            base_for_pf = basic_monthly or monthly_ctc
+            base_for_pf = min(base_for_pf, float(pf_cfg.get("basic_cap", base_for_pf)))
+            employee_pf = base_for_pf * (float(pf_cfg.get("employee_percent", 0)) / 100.0)
+            employer_pf = base_for_pf * (float(pf_cfg.get("employer_percent", 0)) / 100.0)
+            deductions.append(
+                {
+                    "code": "PF_EMP",
+                    "name": "Employee PF",
+                    "type": "deduction",
+                    "percentage": pf_cfg.get("employee_percent"),
+                    "monthly_amount": round2(employee_pf),
+                    "annual_amount": round2(employee_pf * 12),
+                    "description": f"PF on base {round2(base_for_pf)} with cap {pf_cfg.get('basic_cap')}",
+                }
+            )
+            total_deductions_monthly += employee_pf
+            deductions.append(
+                {
+                    "code": "PF_EMPR",
+                    "name": "Employer PF",
+                    "type": "deduction",
+                    "percentage": pf_cfg.get("employer_percent"),
+                    "monthly_amount": round2(employer_pf),
+                    "annual_amount": round2(employer_pf * 12),
+                    "description": "Employer PF contribution (deducted from CTC)",
+                }
+            )
+            total_deductions_monthly += employer_pf
+
+        # Statutory ESI (only if within wage limit)
+        if esi_enabled and monthly_ctc <= float(esi_cfg.get("wage_limit", monthly_ctc)):
+            esi_base = monthly_ctc
+            employee_esi = esi_base * (float(esi_cfg.get("employee_percent", 0)) / 100.0)
+            employer_esi = esi_base * (float(esi_cfg.get("employer_percent", 0)) / 100.0)
+            deductions.append(
+                {
+                    "code": "ESI_EMP",
+                    "name": "Employee ESI",
+                    "type": "deduction",
+                    "percentage": esi_cfg.get("employee_percent"),
+                    "monthly_amount": round2(employee_esi),
+                    "annual_amount": round2(employee_esi * 12),
+                    "description": f"ESI on wage limit {esi_cfg.get('wage_limit')}",
+                }
+            )
+            total_deductions_monthly += employee_esi
+            employer_contributions.append(
+                {
+                    "code": "ESI_EMPLOYER",
+                    "name": "Employer ESI Contribution",
+                    "type": "employer_contribution",
+                    "percentage": esi_cfg.get("employer_percent"),
+                    "monthly_amount": round2(employer_esi),
+                    "annual_amount": round2(employer_esi * 12),
+                    "description": "Employer ESI contribution",
+                }
+            )
+
+        gross_monthly = round2(sum(item["monthly_amount"] for item in earnings))
+        gross_annual = round2(gross_monthly * 12)
+        total_deductions_monthly = round2(total_deductions_monthly)
+        total_deductions_annual = round2(total_deductions_monthly * 12)
+        net_monthly = round2(gross_monthly - total_deductions_monthly)
+        net_annual = round2(net_monthly * 12)
+
+        return {
+            "tenant_id": tenant_id,
+            "annual_ctc": round2(annual_ctc_value),
+            "monthly_ctc": round2(monthly_ctc),
+            "earnings": earnings,
+            "deductions": deductions,
+            "employer_contributions": employer_contributions,
+            "totals": {
+                "total_earnings_monthly": gross_monthly,
+                "total_earnings_annual": gross_annual,
+                "total_deductions_monthly": total_deductions_monthly,
+                "total_deductions_annual": total_deductions_annual,
+                "net_salary_monthly": net_monthly,
+                "net_salary_annual": net_annual,
+            },
+            "display": {
+                "earnings": [
+                    {
+                        "label": item["name"],
+                        "code": item["code"],
+                        "amount": item["monthly_amount"],
+                        "percentage": item["percentage"],
+                    }
+                    for item in earnings
+                ],
+                "gross": {"amount": gross_monthly, "percentage": 100.0},
+                "deductions": [
+                    {
+                        "label": item["name"],
+                        "code": item["code"],
+                        "amount": item["monthly_amount"],
+                        "percentage": item["percentage"],
+                    }
+                    for item in deductions
+                ],
+                "net": {"amount": net_monthly},
+            },
+            "config_snapshot": {
+                "salary_components": components,
+                "statutory": statutory,
+            },
+        }

@@ -2,6 +2,8 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, Path, Depends, H
 import os
 from uuid import uuid4
 from app.services.employee_service import EmployeeService  
+from app.services.payroll_config_service import PayrollConfigError
+from app.utils.auth_utils import get_request_payload
 from app.utils.response import format_response, convert_objectid_to_str
 import datetime
 from typing import List, Optional
@@ -19,6 +21,9 @@ def save_upload_file(upload_file: UploadFile, unique_name: str):
     return file_path
 
 router = APIRouter()
+
+def get_current_user(request: Request):
+    return get_request_payload(request)
 
 @router.post("/basic-info")
 async def basic_details(request: Request):
@@ -228,6 +233,63 @@ async def job_details(request: Request):
                 statuscode=404,
                 data={"message": "Failed to update job details."}
             )
+    except Exception as e:
+        return format_response(
+            success=False,
+            msg=str(e),
+            statuscode=500,
+            data={"message": str(e)}
+        )
+
+
+@router.post("/ctc-breakdown")
+async def ctc_breakdown(request: Request, current_user: dict = Depends(get_current_user)):
+    try:
+        payload = await request.json()
+        tenant_id = current_user.get("tenant_id")
+        annual_ctc = payload.get("annualCtc") or payload.get("annual_ctc")
+        if not tenant_id:
+            return format_response(
+                success=False,
+                msg="No tenant associated with token",
+                statuscode=403,
+                data={"message": "No tenant associated with token"}
+            )
+        if annual_ctc is None:
+            return format_response(
+                success=False,
+                msg="annualCtc is required.",
+                statuscode=400,
+                data={"message": "annualCtc is required."}
+            )
+        instanceClass = EmployeeService()
+        breakdown = instanceClass.calculate_ctc_breakdown(tenant_id, annual_ctc)
+        return format_response(
+            success=True,
+            msg="CTC breakdown calculated successfully",
+            statuscode=200,
+            data=breakdown
+        )
+    except PayrollConfigError as exc:
+        return format_response(
+            success=False,
+            msg=str(exc),
+            statuscode=exc.status_code,
+            data={
+                "error": {
+                    "code": exc.code,
+                    "message": str(exc),
+                    "details": exc.errors,
+                }
+            },
+        )
+    except ValueError as exc:
+        return format_response(
+            success=False,
+            msg=str(exc),
+            statuscode=400,
+            data={"message": str(exc)}
+        )
     except Exception as e:
         return format_response(
             success=False,
